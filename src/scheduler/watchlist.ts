@@ -80,9 +80,6 @@ export class WatchlistRotator {
             JSON.stringify(result).slice(0, 8000),
             new Date().toISOString(),
           );
-        this.database.database.exec(
-          "DELETE FROM activity_facts WHERE id NOT IN (SELECT id FROM activity_facts ORDER BY created_at DESC LIMIT 500)",
-        );
       } finally {
         this.database.database
           .prepare(
@@ -92,6 +89,13 @@ export class WatchlistRotator {
           .run(entry.key, new Date().toISOString());
       }
     }
+    this.database.database
+      .prepare(
+        `DELETE FROM activity_facts WHERE kind = 'watchlist-check' AND id NOT IN (
+           SELECT id FROM activity_facts WHERE kind = 'watchlist-check'
+           ORDER BY created_at DESC LIMIT 500)`,
+      )
+      .run();
     return entries.length;
   }
 }

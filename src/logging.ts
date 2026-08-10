@@ -1,12 +1,16 @@
-import { renameSync, statSync } from "node:fs";
 import { chmod, mkdir, open } from "node:fs/promises";
 import { join } from "node:path";
 import pino, { type Logger } from "pino";
+import { createStream } from "rotating-file-stream";
 
 const sensitiveKey =
   /(?:api[-_]?key|authorization|access[-_]?token|refresh[-_]?token|password|secret|cookie|credential|webhook[-_]?secret|\bcode\b)/i;
 const sensitiveQuery =
   /^(?:code|token|access_token|refresh_token|api_key|key|signature)$/i;
+
+export interface ManagedLogger extends Logger {
+  close(): Promise<void>;
+}
 
 export function redactForLogging(
   value: unknown,
@@ -29,20 +33,20 @@ export function redactForLogging(
 export async function createLogger(
   logDirectory: string,
   level = "info",
-): Promise<Logger> {
+): Promise<ManagedLogger> {
   await mkdir(logDirectory, { recursive: true, mode: 0o700 });
   if (process.platform !== "win32") await chmod(logDirectory, 0o700);
   const path = join(logDirectory, "stan.log");
-  rotate(path);
   const file = await open(path, "a", 0o600);
   await file.close();
   if (process.platform !== "win32") await chmod(path, 0o600);
-  const destination = pino.destination({
-    dest: path,
-    sync: false,
-    mkdir: true,
+  const destination = createStream("stan.log", {
+    path: logDirectory,
+    size: "5M",
+    maxFiles: 5,
+    mode: 0o600,
   });
-  return pino(
+  const logger = pino(
     {
       level,
       base: { service: "stan" },
@@ -61,6 +65,17 @@ export async function createLogger(
     },
     destination,
   );
+  return Object.assign(logger, {
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        const failed = (error: Error) => reject(error);
+        destination.once("error", failed);
+        destination.end(() => {
+          destination.removeListener("error", failed);
+          resolve();
+        });
+      }),
+  });
 }
 
 function sanitizeString(value: string): string {
@@ -83,20 +98,4 @@ function sanitizeString(value: string): string {
     }
   }
   return result;
-}
-
-function rotate(path: string): void {
-  try {
-    if (statSync(path).size < 5 * 1024 * 1024) return;
-  } catch {
-    return;
-  }
-  for (let index = 4; index >= 1; index -= 1) {
-    try {
-      renameSync(`${path}.${index}`, `${path}.${index + 1}`);
-    } catch {
-      // Missing generations are expected.
-    }
-  }
-  renameSync(path, `${path}.1`);
 }

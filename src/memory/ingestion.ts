@@ -1,9 +1,10 @@
 import type { ApplicationDatabase } from "../storage/application-db.ts";
+import { redactForLogging } from "../logging.ts";
 import type { SupermemoryProvider } from "./supermemory.ts";
 
 export async function ingestPendingMemory(
   database: ApplicationDatabase,
-  memory: SupermemoryProvider,
+  memory: SupermemoryProvider | undefined,
   input: {
     localDate: string;
     conversationId: string;
@@ -28,6 +29,7 @@ export async function ingestPendingMemory(
       input.complete ? 1 : 0,
       now,
     );
+  if (!memory) return;
   try {
     const result = await memory.ingestSession(input);
     database.database
@@ -36,15 +38,19 @@ export async function ingestPendingMemory(
       )
       .run(result.id, result.status, new Date().toISOString(), customId);
   } catch (error) {
+    const message =
+      error instanceof Error
+        ? String(redactForLogging(error.message)).slice(0, 500)
+        : "Memory provider failed";
     database.database
       .prepare(
-        `UPDATE memory_documents SET status = 'pending', attempts = attempts + 1, next_attempt_at = ?, last_error = ?, updated_at = ? WHERE custom_id = ?`,
+        `UPDATE memory_documents SET status = CASE WHEN attempts + 1 >= 3 THEN 'failed' ELSE 'pending' END,
+         attempts = attempts + 1, next_attempt_at = CASE WHEN attempts + 1 >= 3 THEN NULL ELSE ? END,
+         last_error = ?, updated_at = ? WHERE custom_id = ?`,
       )
       .run(
         new Date(Date.now() + 15 * 60_000).toISOString(),
-        error instanceof Error
-          ? error.message.slice(0, 500)
-          : "Memory provider failed",
+        message,
         new Date().toISOString(),
         customId,
       );
@@ -58,7 +64,8 @@ export async function reconcilePendingMemory(
   const rows = database.database
     .prepare(
       `SELECT custom_id, provider_id, status, local_date, conversation_id, content, complete FROM memory_documents
-       WHERE status <> 'done' AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY updated_at LIMIT 5`,
+       WHERE status NOT IN ('done', 'failed') AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+       ORDER BY updated_at LIMIT 5`,
     )
     .all(new Date().toISOString()) as {
     custom_id: string;
@@ -70,7 +77,7 @@ export async function reconcilePendingMemory(
     complete: number;
   }[];
   for (const row of rows) {
-    if (row.provider_id && !["pending", "failed"].includes(row.status)) {
+    if (row.provider_id) {
       try {
         const document = (await memory.status(row.provider_id)) as {
           status?: string;

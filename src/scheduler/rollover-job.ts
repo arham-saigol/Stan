@@ -21,6 +21,13 @@ export async function repairDailyRollover(
     )
     .all(localDate) as { local_date: string; conversation_id: string }[];
   for (const previous of open) {
+    const unsettled = database.database
+      .prepare(
+        `SELECT 1 FROM inbound_messages WHERE session_id = ? AND response_text IS NULL
+         AND state IN ('claimed', 'dispatched', 'failed', 'unknown') LIMIT 1`,
+      )
+      .get(previous.conversation_id);
+    if (unsettled) continue;
     database.database
       .prepare(
         "UPDATE daily_sessions SET state = 'closed', closed_at = ? WHERE local_date = ?",
@@ -32,7 +39,7 @@ export async function repairDailyRollover(
         "UPDATE daily_sessions SET transcript_complete = 1 WHERE local_date = ?",
       )
       .run(previous.local_date);
-    if (memory && transcript.trim()) {
+    if (transcript.trim()) {
       await ingestPendingMemory(database, memory, {
         localDate: previous.local_date,
         conversationId: previous.conversation_id,

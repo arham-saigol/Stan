@@ -41,10 +41,11 @@ export function settingsTools(
       }),
       async run({ data }) {
         requireOwner();
-        const current = store.read();
-        const heartbeat = { ...current.heartbeat, ...data };
-        await store.write({ ...current, heartbeat });
-        return { output: heartbeat };
+        const updated = await store.update((current) => ({
+          ...current,
+          heartbeat: { ...current.heartbeat, ...data },
+        }));
+        return { output: updated.heartbeat };
       },
     }),
   ];

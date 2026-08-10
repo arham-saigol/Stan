@@ -109,7 +109,8 @@ CREATE TABLE IF NOT EXISTS scheduled_publications (
   provider_id TEXT NOT NULL,
   next_poll_at TEXT NOT NULL,
   last_status TEXT NOT NULL,
-  notified_status TEXT
+  notified_status TEXT,
+  poll_count INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 CREATE TABLE IF NOT EXISTS heartbeat_occurrences (
   occurrence_id TEXT PRIMARY KEY,
@@ -216,7 +217,21 @@ export class ApplicationDatabase {
   }
 
   migrate(): void {
-    this.transaction(() => this.database.exec(migration));
+    this.transaction(() => {
+      this.database.exec(migration);
+      addColumnIfMissing(
+        this.database,
+        "inbound_messages",
+        "flue_submission_id",
+        "TEXT",
+      );
+      addColumnIfMissing(
+        this.database,
+        "scheduled_publications",
+        "poll_count",
+        "INTEGER NOT NULL DEFAULT 0",
+      );
+    });
   }
 
   close(): void {
@@ -517,6 +532,19 @@ export class ApplicationDatabase {
       .run(retryCount, nextRetryAt, error, now.toISOString(), logicalId);
     return this.getXOperation(logicalId)!;
   }
+}
+
+function addColumnIfMissing(
+  database: DatabaseSync,
+  table: string,
+  column: string,
+  declaration: string,
+): void {
+  const columns = database.prepare(`PRAGMA table_info(${table})`).all() as {
+    name: string;
+  }[];
+  if (!columns.some((candidate) => candidate.name === column))
+    database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${declaration}`);
 }
 
 function mapAuthorization(

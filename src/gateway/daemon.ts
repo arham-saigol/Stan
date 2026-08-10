@@ -1,15 +1,19 @@
 #!/usr/bin/env node
 import { serve, type ServerType } from "@hono/node-server";
 import { Hono } from "hono";
-import { open, readFile, stat, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { lock } from "proper-lockfile";
 import { configureStanEnvironment } from "../agents/stan.ts";
 import { StanAgentRuntime } from "../agents/runtime.ts";
 import { createFlueCodexProvider } from "../auth/codex.ts";
 import { CredentialStore } from "../config/credentials.ts";
 import { ConfigStore } from "../config/store.ts";
-import { createLogger, redactForLogging } from "../logging.ts";
+import {
+  createLogger,
+  redactForLogging,
+  type ManagedLogger,
+} from "../logging.ts";
 import { SupermemoryProvider } from "../memory/supermemory.ts";
 import { SemanticContextCache } from "../memory/context.ts";
 import { reconcilePendingMemory } from "../memory/ingestion.ts";
@@ -43,16 +47,24 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
   await initializeStateRoot(root);
   const paths = statePaths(root);
   const releaseLock = await acquireDaemonLock(paths.root);
+  let startedDatabase: ApplicationDatabase | undefined;
+  let startedLogger: ManagedLogger | undefined;
+  let startedAgent: StanAgentRuntime | undefined;
+  let startedWhatsApp: WhatsAppGateway | undefined;
+  let startedScheduler: Scheduler | undefined;
+  let startedServer: ServerType | undefined;
   try {
     const logger = await createLogger(
       paths.logs,
       process.env.LOG_LEVEL ?? "info",
     );
+    startedLogger = logger;
     const configStore = new ConfigStore(root);
     const config = configStore.read();
     const credentialStore = new CredentialStore(root);
     const credentials = credentialStore.read();
     const database = new ApplicationDatabase(paths.applicationDb);
+    startedDatabase = database;
     database.migrate();
     database.database.exec(
       "UPDATE inbound_messages SET state = 'unknown', error = 'Daemon restarted before delivery outcome was verified' WHERE state IN ('claimed', 'dispatched', 'reply_pending')",
@@ -95,6 +107,7 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
       semanticContext.forTask(query),
     );
     await agent.start();
+    startedAgent = agent;
 
     const delivery: DeliveryService = new DeliveryService({
       send: (text, messageId): Promise<{ messageId: string }> =>
@@ -123,12 +136,13 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
       send: (text, sourceMessageId) =>
         delivery.sendOwner(text, `owner-reply:${sourceMessageId}`),
     });
-    const whatsapp: WhatsAppGateway = new WhatsAppGateway(
+    const whatsapp = new WhatsAppGateway(
       database,
       ingress,
       config.ownerPhone,
       logger,
     );
+    startedWhatsApp = whatsapp;
     await repairDailyRollover(database, memory, logger);
     const watchlist = new WatchlistRotator(database, workspace, xquik);
     const scheduler = new Scheduler(
@@ -162,6 +176,7 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
         await watchlist.check(3);
       },
     );
+    startedScheduler = scheduler;
     scheduler.start();
     whatsapp.start();
 
@@ -178,6 +193,7 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
       database.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await releaseLock();
+      await logger.close();
     };
     const app = controlApp(
       credentials.controlToken,
@@ -195,6 +211,7 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
       hostname: "127.0.0.1",
       port: CONTROL_PORT,
     });
+    startedServer = server;
     await atomicWritePrivate(
       paths.service,
       `${JSON.stringify({ pid: process.pid, port: CONTROL_PORT, startedAt: new Date().toISOString() }, null, 2)}\n`,
@@ -206,58 +223,44 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
     process.once("SIGINT", () => void shutdown().then(() => process.exit(0)));
     process.once("SIGTERM", () => void shutdown().then(() => process.exit(0)));
   } catch (error) {
+    startedWhatsApp?.quiesce();
+    await startedScheduler?.stop().catch(() => undefined);
+    await startedWhatsApp?.drain().catch(() => undefined);
+    await startedAgent?.stop().catch(() => undefined);
+    await startedWhatsApp?.stop().catch(() => undefined);
+    if (startedServer)
+      await new Promise<void>((resolvePromise) =>
+        startedServer!.close(() => resolvePromise()),
+      ).catch(() => undefined);
+    try {
+      startedDatabase?.close();
+    } catch {
+      // Preserve the startup failure that caused cleanup.
+    }
     await releaseLock();
+    await startedLogger?.close().catch(() => undefined);
     throw error;
   }
 }
 
 async function acquireDaemonLock(root: string): Promise<() => Promise<void>> {
   const path = join(root, "daemon.lock");
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const handle = await open(path, "wx", 0o600);
-      await handle.writeFile(`${process.pid}\n`);
-      let released = false;
-      return async () => {
-        if (released) return;
-        released = true;
-        await handle.close();
-        await unlink(path).catch(() => undefined);
-      };
-    } catch (error) {
-      if (!isAlreadyExists(error)) throw error;
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
-      const pid = Number.parseInt(
-        await readFile(path, "utf8").catch(() => ""),
-        10,
-      );
-      if (Number.isInteger(pid) && processIsAlive(pid)) {
-        throw new Error(
-          `Stan daemon is already starting or running as PID ${pid}`,
-          { cause: error },
-        );
-      }
-      const metadata = await stat(path).catch(() => undefined);
-      if (metadata && Date.now() - metadata.mtimeMs < 30_000) {
-        throw new Error("Stan daemon is already starting", { cause: error });
-      }
-      await unlink(path).catch(() => undefined);
-    }
-  }
-  throw new Error("Could not acquire the Stan daemon lock");
-}
-
-function processIsAlive(pid: number): boolean {
   try {
-    process.kill(pid, 0);
-    return true;
+    return await lock(root, {
+      lockfilePath: path,
+      realpath: false,
+      stale: 30_000,
+      update: 10_000,
+      retries: 0,
+    });
   } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "EPERM";
+    if (error instanceof Error && "code" in error && error.code === "ELOCKED") {
+      throw new Error("Stan daemon is already starting or running", {
+        cause: error,
+      });
+    }
+    throw error;
   }
-}
-
-function isAlreadyExists(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error && error.code === "EEXIST";
 }
 
 function controlApp(

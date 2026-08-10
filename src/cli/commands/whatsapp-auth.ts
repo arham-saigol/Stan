@@ -126,6 +126,8 @@ export async function authenticateWhatsApp(
       };
       connect();
     });
+    await socket?.end(undefined);
+    socket = undefined;
     target.configureOwnerIdentity(
       `${config.ownerPhone.slice(1)}@s.whatsapp.net`,
     );

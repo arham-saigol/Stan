@@ -57,7 +57,7 @@ export async function reconcilePendingXOperations(
     }
     let updated = database.transaction(() => {
       const applied = applyResult(database, operation, request, result);
-      if (applied.status !== "publishing" && applied.status !== "scheduled") {
+      if (applied.status !== "publishing") {
         database.database
           .prepare(
             "UPDATE x_operations SET next_retry_at = ? WHERE logical_id = ?",
@@ -70,12 +70,9 @@ export async function reconcilePendingXOperations(
       (updated.status === "publishing" || updated.status === "scheduled") &&
       updated.providerId
     ) {
-      trackProviderPoll(database, updated, now);
+      trackProviderPoll(database, updated, now, updated.status === "scheduled");
       if (updated.status === "scheduled") {
-        await delivery.sendOwner(
-          renderResult(updated),
-          `x-operation:${updated.logicalId}:scheduled`,
-        );
+        await deliverTerminalResult(database, delivery, updated);
       }
       continue;
     }

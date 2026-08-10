@@ -131,7 +131,10 @@ function daemonEntrypoint(): string {
 }
 
 function systemdEscape(value: string): string {
-  return value.replaceAll("\\", "\\\\").replaceAll(" ", "\\x20");
+  return value
+    .replaceAll("%", "%%")
+    .replaceAll("\\", "\\\\")
+    .replaceAll(" ", "\\x20");
 }
 
 function xmlEscape(value: string): string {

@@ -38,7 +38,7 @@ describe("Zernio public-write boundary", () => {
     database.close();
   });
 
-  it("reuses one request id across an ambiguous timeout and retry", async () => {
+  it("does not bypass persisted retry backoff on a repeated owner turn", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
     authorized(database);
@@ -65,18 +65,12 @@ describe("Zernio public-write boundary", () => {
     const request = { operation: "publish" as const, content: "hello" };
 
     const firstResult = await service.execute(context, request);
-    const retryResult = await service.execute(context, request);
+    const replayedResult = await service.execute(context, request);
 
     expect(firstResult.status).toBe("publishing");
-    expect(retryResult).toMatchObject({
-      status: "published",
-      publicId: "x-123",
-    });
-    expect(posts).toHaveLength(1);
-    expect(mutate).toHaveBeenCalledTimes(2);
-    expect(mutate.mock.calls[0]![0].requestId).toBe(
-      mutate.mock.calls[1]![0].requestId,
-    );
+    expect(replayedResult.logicalId).toBe(firstResult.logicalId);
+    expect(posts.size).toBe(1);
+    expect(mutate).toHaveBeenCalledOnce();
     database.close();
   });
 
@@ -117,6 +111,37 @@ describe("Zernio public-write boundary", () => {
     database.close();
   });
 
+  it("rejects an empty target before the account boundary can be bypassed", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-edit",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "edit X post",
+      receivedAt: new Date().toISOString(),
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-edit",
+      operation: "edit",
+    });
+    const mutate = vi.fn();
+    const verifyPostAccount = vi.fn();
+    const service = new ZernioWriteService(database, {
+      mutate,
+      verifyPostAccount,
+    });
+
+    await expect(
+      service.execute(
+        { sourceMessageId: "owner-edit", selectedAccountId: "account-1" },
+        { operation: "edit", providerPostId: "", content: "changed" },
+      ),
+    ).rejects.toThrow(/target X post ID/i);
+    expect(verifyPostAccount).not.toHaveBeenCalled();
+    expect(mutate).not.toHaveBeenCalled();
+    database.close();
+  });
+
   it("does not repeat a non-idempotent edit after an ambiguous provider outcome", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
@@ -154,6 +179,13 @@ describe("Zernio public-write boundary", () => {
     expect(first.nextRetryAt).toBeNull();
     expect(repeated.logicalId).toBe(first.logicalId);
     expect(mutate).toHaveBeenCalledOnce();
+    expect(
+      database.database
+        .prepare(
+          "SELECT provider_id FROM scheduled_publications WHERE logical_operation_id = ?",
+        )
+        .get(first.logicalId),
+    ).toEqual({ provider_id: "z-1" });
     database.close();
   });
 

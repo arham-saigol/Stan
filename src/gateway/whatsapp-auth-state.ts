@@ -1,6 +1,7 @@
 import {
   BufferJSON,
   initAuthCreds,
+  proto,
   type AuthenticationCreds,
   type AuthenticationState,
   type SignalDataSet,
@@ -22,7 +23,13 @@ export function createSqliteAuthState(application: ApplicationDatabase): {
         const result: { [id: string]: SignalDataTypeMap[T] } = {};
         for (const id of ids) {
           const value = readValue<SignalDataTypeMap[T]>(application, type, id);
-          if (value !== undefined) result[id] = value;
+          if (value !== undefined)
+            result[id] =
+              type === "app-state-sync-key"
+                ? (proto.Message.AppStateSyncKeyData.fromObject(
+                    value as Record<string, unknown>,
+                  ) as unknown as SignalDataTypeMap[T])
+                : value;
         }
         return result;
       },
@@ -44,7 +51,9 @@ export function createSqliteAuthState(application: ApplicationDatabase): {
         });
       },
       clear() {
-        application.database.exec("DELETE FROM whatsapp_auth");
+        application.database.exec(
+          "DELETE FROM whatsapp_auth WHERE category <> 'creds'",
+        );
       },
     },
   };

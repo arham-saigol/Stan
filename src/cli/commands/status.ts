@@ -1,42 +1,44 @@
+import { DatabaseSync } from "node:sqlite";
 import { ConfigStore } from "../../config/store.ts";
 import { CredentialStore } from "../../config/credentials.ts";
 import { statePaths } from "../../state.ts";
-import { ApplicationDatabase } from "../../storage/application-db.ts";
 import { getDaemonStatus } from "./service.ts";
 
 export async function statusCommand(root: string): Promise<void> {
   const processStatus = await getDaemonStatus(root);
   const config = new ConfigStore(root).read();
   const credentials = new CredentialStore(root).tryRead();
-  const database = new ApplicationDatabase(statePaths(root).applicationDb);
-  database.migrate();
+  const database = new DatabaseSync(statePaths(root).applicationDb, {
+    readOnly: true,
+  });
   try {
-    const session = database.database
+    const session = database
       .prepare(
         "SELECT conversation_id FROM daily_sessions WHERE state = 'active' LIMIT 1",
       )
       .get() as { conversation_id: string } | undefined;
-    const nextAutomation = database.database
+    const nextAutomation = database
       .prepare(
         "SELECT MIN(next_run_at) AS next FROM automations WHERE enabled = 1",
       )
       .get() as { next: string | null };
-    const lastOwner = database.database
+    const lastOwner = database
       .prepare(
         "SELECT received_at FROM inbound_messages WHERE state = 'delivered' ORDER BY received_at DESC LIMIT 1",
       )
       .get() as { received_at: string } | undefined;
-    const lastHeartbeat = database.database
+    const lastHeartbeat = database
       .prepare(
         "SELECT updated_at FROM heartbeat_occurrences WHERE status IN ('notified', 'silent') ORDER BY updated_at DESC LIMIT 1",
       )
       .get() as { updated_at: string } | undefined;
     const attentionRequired = (
-      database.database
+      database
         .prepare(
           `SELECT
              (SELECT COUNT(*) FROM inbound_messages WHERE state = 'unknown') +
-             (SELECT COUNT(*) FROM automation_runs WHERE status = 'unknown') +
+             (SELECT COUNT(*) FROM automation_runs WHERE status IN ('unknown', 'notification_pending')) +
+             (SELECT COUNT(*) FROM memory_documents WHERE status = 'failed') +
              (SELECT COUNT(*) FROM x_operations x WHERE status = 'publishing' AND next_retry_at IS NULL
                 AND NOT EXISTS (SELECT 1 FROM scheduled_publications s WHERE s.logical_operation_id = x.logical_id))
            AS count`,

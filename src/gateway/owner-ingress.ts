@@ -43,6 +43,7 @@ export class OwnerIngress {
   private readonly dispatch: OwnerDispatch;
   private readonly read: OwnerRead;
   private readonly send: OwnerSend;
+  private readonly processing = new Set<string>();
 
   constructor(input: {
     database: ApplicationDatabase;
@@ -110,7 +111,9 @@ export class OwnerIngress {
       session_id: string | null;
       flue_submission_id: string | null;
     }[];
+    let processed = 0;
     for (const row of rows) {
+      if (this.processing.has(row.provider_message_id)) continue;
       await this.process(
         {
           id: row.provider_message_id,
@@ -124,8 +127,9 @@ export class OwnerIngress {
         row.session_id ?? undefined,
         row.flue_submission_id ?? undefined,
       );
+      processed += 1;
     }
-    return rows.length;
+    return processed;
   }
 
   private async process(
@@ -133,6 +137,7 @@ export class OwnerIngress {
     persistedSessionId?: string,
     persistedSubmissionId?: string,
   ): Promise<{ status: "delivered" | "failed" }> {
+    this.processing.add(message.id);
     try {
       if (!this.database.getAuthorizationForSource(message.id)) {
         const operation = deriveAuthorizationOperation(message.text);
@@ -180,6 +185,8 @@ export class OwnerIngress {
         error: safeError(error),
       });
       return { status: "failed" };
+    } finally {
+      this.processing.delete(message.id);
     }
   }
 

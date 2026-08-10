@@ -187,6 +187,22 @@ describe("owner-only ingress", () => {
     ).toEqual({ state: "delivered" });
   });
 
+  it("does not reconcile an owner message that this process is still handling", async () => {
+    const { ingress, dispatch, read } = await harness();
+    let release!: (value: string) => void;
+    read.mockImplementationOnce(
+      () => new Promise<string>((resolve) => (release = resolve)),
+    );
+
+    const handling = ingress.handle(message({ id: "in-flight" }));
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+
+    expect(await ingress.reconcilePending()).toBe(0);
+    release("settled reply");
+    await expect(handling).resolves.toEqual({ status: "delivered" });
+    expect(read).toHaveBeenCalledOnce();
+  });
+
   it("derives one expiring publish envelope from an explicit owner command", async () => {
     const { ingress, database, deliveries } = await harness();
 

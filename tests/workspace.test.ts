@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -39,13 +39,10 @@ describe("bounded workspace", () => {
     expect(await store.read("goals")).toMatch(/first\nsecond$/);
   });
 
-  it("rejects traversal, symlinks, oversized writes and stale replacements", async () => {
+  it("rejects traversal, oversized writes and stale replacements", async () => {
     const root = await mkdtemp(join(tmpdir(), "stan-workspace-"));
-    const outside = join(root, "..", `outside-${crypto.randomUUID()}.md`);
     const store = new WorkspaceStore(root, { maxBytes: 128 });
     await store.initialize();
-    await writeFile(outside, "secret");
-    await symlink(outside, join(root, "GOALS.md")).catch(() => undefined);
 
     await expect(store.read("../config.json" as "goals")).rejects.toThrow(
       /allowlist/i,
@@ -64,12 +61,20 @@ describe("bounded workspace", () => {
         "owner-1",
       ),
     ).rejects.toThrow(/exactly once/i);
-    if (
-      (await readFile(join(root, "GOALS.md"), "utf8").catch(
-        () => "symlink",
-      )) === "secret"
-    ) {
-      await expect(store.read("goals")).rejects.toThrow(/symlink/i);
-    }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects allowlisted files replaced by symlinks",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "stan-workspace-"));
+      const outside = join(root, "..", `outside-${crypto.randomUUID()}.md`);
+      const store = new WorkspaceStore(root, { maxBytes: 128 });
+      await store.initialize();
+      await writeFile(outside, "secret");
+      await rm(join(root, "GOALS.md"));
+      await symlink(outside, join(root, "GOALS.md"));
+
+      await expect(store.read("goals")).rejects.toThrow(/symlink/i);
+    },
+  );
 });

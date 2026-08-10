@@ -31,7 +31,7 @@ export class SupermemoryProvider {
     complete: boolean;
   }): Promise<{ id: string; status: string }> {
     return this.client.add({
-      content: bounded(input.transcript, 200_000),
+      content: truncated(input.transcript, 200_000),
       customId: `stan-session-${input.localDate}`,
       containerTag: this.containerTag,
       metadata: {
@@ -91,6 +91,12 @@ function bounded(value: string, maximum: number): string {
   if (!result || result.length > maximum)
     throw new Error(`Input must contain 1-${maximum} characters`);
   return result;
+}
+
+function truncated(value: string, maximum: number): string {
+  const result = value.trim();
+  if (!result) throw new Error(`Input must contain 1-${maximum} characters`);
+  return result.length <= maximum ? result : result.slice(-maximum);
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

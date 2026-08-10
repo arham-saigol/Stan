@@ -80,11 +80,12 @@ export class ZernioWriteService {
     const existing = this.database.getXOperationByEnvelope(envelope.id);
     if (existing) {
       const operation = begin();
-      if (isTerminal(operation.status) || !isRetryableCreate(request.operation))
-        return operation;
+      return operation;
     }
     const targetPostId =
       "providerPostId" in request ? request.providerPostId : undefined;
+    if ("providerPostId" in request && !targetPostId?.trim())
+      throw new Error("A target X post ID is required");
     if (targetPostId) {
       if (!this.provider.verifyPostAccount) {
         throw new Error("The Zernio account boundary cannot verify this post");
@@ -162,6 +163,18 @@ export class ZernioWriteService {
           result.error ??
             "Zernio accepted the request but returned no provider post ID",
         );
+      } else if (
+        updated.status === "publishing" &&
+        !isRetryableCreate(request.operation) &&
+        targetPostId
+      ) {
+        const pollable = this.database.updateXOperation(updated.logicalId, {
+          status: "publishing",
+          providerId: updated.providerId ?? targetPostId,
+          error: updated.error,
+        });
+        trackProviderPoll(this.database, pollable, new Date());
+        return pollable;
       }
       return updated;
     } catch (error) {
@@ -178,10 +191,16 @@ export class ZernioWriteService {
           message,
         );
       }
-      return this.database.updateXOperation(operation.logicalId, {
+      const updated = this.database.updateXOperation(operation.logicalId, {
         status,
+        ...(status === "publishing" && targetPostId
+          ? { providerId: targetPostId }
+          : {}),
         error: message,
       });
+      if (status === "publishing" && targetPostId)
+        trackProviderPoll(this.database, updated, new Date());
+      return updated;
     }
   }
 }
@@ -239,7 +258,7 @@ function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (value && typeof value === "object") {
     return `{${Object.entries(value)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .map(([key, nested]) => `${JSON.stringify(key)}:${stableJson(nested)}`)
       .join(",")}}`;
   }
@@ -264,12 +283,14 @@ export function trackProviderPoll(
   database: ApplicationDatabase,
   operation: XOperation,
   now: Date,
+  preserveRetry = false,
 ): void {
   database.database
     .prepare(
       `INSERT INTO scheduled_publications(logical_operation_id, provider_id, next_poll_at, last_status)
        VALUES (?, ?, ?, ?) ON CONFLICT(logical_operation_id) DO UPDATE SET
-       provider_id = excluded.provider_id, next_poll_at = excluded.next_poll_at, last_status = excluded.last_status`,
+       provider_id = excluded.provider_id, next_poll_at = excluded.next_poll_at,
+       last_status = excluded.last_status, poll_count = 0`,
     )
     .run(
       operation.logicalId,
@@ -279,11 +300,13 @@ export function trackProviderPoll(
         : new Date(now.getTime() + 60_000).toISOString(),
       operation.status,
     );
-  database.database
-    .prepare(
-      "UPDATE x_operations SET next_retry_at = NULL WHERE logical_id = ?",
-    )
-    .run(operation.logicalId);
+  if (!preserveRetry) {
+    database.database
+      .prepare(
+        "UPDATE x_operations SET next_retry_at = NULL WHERE logical_id = ?",
+      )
+      .run(operation.logicalId);
+  }
 }
 
 export function firstSchedulePoll(

@@ -46,4 +46,69 @@ describe("daily session rollover", () => {
     ]);
     database.close();
   });
+
+  it("waits for the final owner turn and queues its complete transcript in degraded mode", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const logger = pino({ level: "silent" });
+    await repairDailyRollover(
+      database,
+      undefined,
+      logger,
+      Temporal.Instant.from("2026-08-13T18:59:00Z"),
+    );
+    database.claimInbound({
+      id: "last-turn",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "one last thing",
+      receivedAt: "2026-08-13T19:00:30Z",
+    });
+    database.setInboundState("last-turn", "dispatched", {
+      sessionId: "stan-owner-2026-08-13",
+    });
+
+    await repairDailyRollover(
+      database,
+      undefined,
+      logger,
+      Temporal.Instant.from("2026-08-13T19:02:00Z"),
+    );
+    expect(
+      database.database
+        .prepare(
+          "SELECT state, transcript_complete FROM daily_sessions WHERE local_date = '2026-08-13'",
+        )
+        .get(),
+    ).toEqual({ state: "active", transcript_complete: 0 });
+
+    database.setInboundState("last-turn", "delivered", {
+      responseText: "done",
+      outboundMessageId: "out-1",
+    });
+    await repairDailyRollover(
+      database,
+      undefined,
+      logger,
+      Temporal.Instant.from("2026-08-13T19:02:30Z"),
+    );
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT state, transcript_complete FROM daily_sessions WHERE local_date = '2026-08-13'",
+        )
+        .get(),
+    ).toEqual({ state: "closed", transcript_complete: 1 });
+    expect(
+      database.database
+        .prepare(
+          "SELECT status, content FROM memory_documents WHERE custom_id = 'stan-session-2026-08-13'",
+        )
+        .get(),
+    ).toEqual({
+      status: "pending",
+      content: "owner: one last thing\nstan: done",
+    });
+    database.close();
+  });
 });

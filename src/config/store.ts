@@ -5,6 +5,7 @@ import { parseConfig, TIMEZONE, type StanConfig } from "./schema.ts";
 
 export class ConfigStore {
   readonly path: string;
+  private updateQueue = Promise.resolve();
 
   constructor(root: string) {
     this.path = statePaths(root).config;
@@ -30,6 +31,17 @@ export class ConfigStore {
     const config = parseConfig(input);
     await atomicWritePrivate(this.path, `${JSON.stringify(config, null, 2)}\n`);
     return config;
+  }
+
+  update(operation: (current: StanConfig) => unknown): Promise<StanConfig> {
+    const result = this.updateQueue.then(() =>
+      this.write(operation(this.read())),
+    );
+    this.updateQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 }
 

@@ -229,11 +229,30 @@ export class Scheduler {
   }
 
   private async runAutomations(now: Temporal.Instant): Promise<void> {
+    for (const pending of this.automations.pendingNotifications()) {
+      try {
+        await this.delivery.sendOwner(
+          pending.output,
+          `automation:${pending.occurrenceId}`,
+        );
+        this.automations.finishRun(pending.occurrenceId, {
+          status: "completed",
+          output: pending.output,
+        });
+      } catch (error) {
+        this.automations.finishRun(pending.occurrenceId, {
+          status: "notification_pending",
+          output: pending.output,
+          error: safeError(error),
+        });
+      }
+    }
     for (const run of this.automations.claimDue(
       new Date(now.epochMilliseconds),
     )) {
+      let reply: string;
       try {
-        const reply = await this.agent.deliver(dailySessionId(now), {
+        reply = await this.agent.deliver(dailySessionId(now), {
           kind: "signal",
           type: "automation",
           body: run.automation.instruction,
@@ -243,21 +262,33 @@ export class Scheduler {
             scheduledFor: run.scheduledFor,
           },
         });
-        if (run.automation.deliveryMode === "owner_whatsapp")
-          await this.delivery.sendOwner(
-            reply,
-            `automation:${run.occurrenceId}`,
-          );
-        this.automations.finishRun(run.occurrenceId, {
-          status: "completed",
-          output: reply.slice(0, 12_000),
-        });
       } catch (error) {
         this.automations.finishRun(run.occurrenceId, {
           status: "failed",
           error: safeError(error),
         });
+        continue;
       }
+      const output = reply.slice(0, 12_000);
+      if (run.automation.deliveryMode === "owner_whatsapp") {
+        try {
+          await this.delivery.sendOwner(
+            output,
+            `automation:${run.occurrenceId}`,
+          );
+        } catch (error) {
+          this.automations.finishRun(run.occurrenceId, {
+            status: "notification_pending",
+            output,
+            error: safeError(error),
+          });
+          continue;
+        }
+      }
+      this.automations.finishRun(run.occurrenceId, {
+        status: "completed",
+        output,
+      });
     }
   }
 }

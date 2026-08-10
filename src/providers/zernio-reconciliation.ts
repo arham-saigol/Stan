@@ -1,5 +1,6 @@
 import type { Post } from "@zernio/node";
 import type { DeliveryService } from "../gateway/delivery.ts";
+import { redactForLogging } from "../logging.ts";
 import type {
   ApplicationDatabase,
   XOperationStatus,
@@ -17,7 +18,7 @@ export async function reconcileScheduledPublications(
 ): Promise<number> {
   const rows = database.database
     .prepare(
-      `SELECT s.logical_operation_id, s.provider_id, s.last_status, s.notified_status, x.operation
+      `SELECT s.logical_operation_id, s.provider_id, s.last_status, s.notified_status, s.poll_count, x.operation
        FROM scheduled_publications s JOIN x_operations x ON x.logical_id = s.logical_operation_id
        WHERE s.next_poll_at <= ? ORDER BY s.next_poll_at LIMIT 10`,
     )
@@ -26,68 +27,99 @@ export async function reconcileScheduledPublications(
     provider_id: string;
     last_status: string;
     notified_status: string | null;
+    poll_count: number;
     operation: string;
   }[];
   for (const row of rows) {
+    let post: Post;
     try {
-      const post = await provider.getPost(row.provider_id);
-      const target = post.platforms?.find(
-        (platform) => platform.platform === "twitter",
-      );
-      const status = normalize(
-        post.status,
-        target?.status,
-        target?.platformPostId,
-        target?.platformPostUrl,
-      );
-      const updated = database.updateXOperation(row.logical_operation_id, {
-        status,
-        providerId: row.provider_id,
-        ...(target?.platformPostId ? { publicId: target.platformPostId } : {}),
-        ...(target?.platformPostUrl
-          ? { publicUrl: target.platformPostUrl }
-          : {}),
-        ...(post.scheduledFor ? { scheduledFor: post.scheduledFor } : {}),
-        error: target?.errorMessage ?? null,
-      });
-      const material =
-        status !== row.last_status && isTerminal(row.operation, status);
-      if (material && row.notified_status !== status) {
-        await delivery.sendOwner(
-          renderStatus(
-            row.operation,
-            updated.status,
-            updated.publicUrl,
-            updated.error,
-          ),
-          `x-operation:${updated.logicalId}:${updated.status}`,
-        );
-      }
-      if (isTerminal(row.operation, status)) {
+      post = await provider.getPost(row.provider_id);
+    } catch (error) {
+      const pollCount = row.poll_count + 1;
+      if (pollCount < 3) {
         database.database
           .prepare(
-            "DELETE FROM scheduled_publications WHERE logical_operation_id = ?",
-          )
-          .run(row.logical_operation_id);
-      } else {
-        database.database
-          .prepare(
-            "UPDATE scheduled_publications SET last_status = ?, notified_status = ?, next_poll_at = ? WHERE logical_operation_id = ?",
+            "UPDATE scheduled_publications SET poll_count = ?, next_poll_at = ? WHERE logical_operation_id = ?",
           )
           .run(
-            status,
-            material ? status : row.notified_status,
-            new Date(now.getTime() + 5 * 60_000).toISOString(),
+            pollCount,
+            new Date(now.getTime() + 15 * 60_000).toISOString(),
             row.logical_operation_id,
           );
+        continue;
       }
-    } catch {
+      const updated = database.updateXOperation(row.logical_operation_id, {
+        status: "partial",
+        error: `Provider verification failed after bounded polling: ${safeError(error)}`,
+      });
+      await delivery.sendOwner(
+        renderStatus(
+          row.operation,
+          updated.status,
+          updated.publicUrl,
+          updated.error,
+        ),
+        `x-operation:${updated.logicalId}:${updated.status}`,
+      );
       database.database
         .prepare(
-          "UPDATE scheduled_publications SET next_poll_at = ? WHERE logical_operation_id = ?",
+          "DELETE FROM scheduled_publications WHERE logical_operation_id = ?",
+        )
+        .run(row.logical_operation_id);
+      continue;
+    }
+    const target = post.platforms?.find(
+      (platform) => platform.platform === "twitter",
+    );
+    const observed = normalize(
+      post.status,
+      target?.status,
+      target?.platformPostId,
+      target?.platformPostUrl,
+    );
+    const incompletePublished =
+      observed === "partial" && post.status === "published";
+    const pollCount = incompletePublished ? row.poll_count + 1 : 0;
+    const waitingForPublicIdentity = incompletePublished && pollCount < 3;
+    const status = waitingForPublicIdentity ? "publishing" : observed;
+    const updated = database.updateXOperation(row.logical_operation_id, {
+      status,
+      providerId: row.provider_id,
+      ...(target?.platformPostId ? { publicId: target.platformPostId } : {}),
+      ...(target?.platformPostUrl ? { publicUrl: target.platformPostUrl } : {}),
+      ...(post.scheduledFor ? { scheduledFor: post.scheduledFor } : {}),
+      error: target?.errorMessage ?? null,
+    });
+    const material =
+      status !== row.last_status && isTerminal(row.operation, status);
+    if (material && row.notified_status !== status) {
+      await delivery.sendOwner(
+        renderStatus(
+          row.operation,
+          updated.status,
+          updated.publicUrl,
+          updated.error,
+        ),
+        `x-operation:${updated.logicalId}:${updated.status}`,
+      );
+    }
+    if (isTerminal(row.operation, status)) {
+      database.database
+        .prepare(
+          "DELETE FROM scheduled_publications WHERE logical_operation_id = ?",
+        )
+        .run(row.logical_operation_id);
+    } else {
+      database.database
+        .prepare(
+          `UPDATE scheduled_publications SET last_status = ?, notified_status = ?, poll_count = ?, next_poll_at = ?
+           WHERE logical_operation_id = ?`,
         )
         .run(
-          new Date(now.getTime() + 15 * 60_000).toISOString(),
+          status,
+          material ? status : row.notified_status,
+          pollCount,
+          new Date(now.getTime() + 5 * 60_000).toISOString(),
           row.logical_operation_id,
         );
     }
@@ -113,11 +145,18 @@ function normalize(
     postStatus === "publishing" ||
     postStatus === "published" ||
     postStatus === "partial" ||
-    postStatus === "failed"
+    postStatus === "failed" ||
+    postStatus === "cancelled"
   ) {
     return postStatus;
   }
   return "publishing";
+}
+
+function safeError(error: unknown): string {
+  return error instanceof Error
+    ? String(redactForLogging(error.message)).slice(0, 500)
+    : "Unknown Zernio polling failure";
 }
 
 function isTerminal(operation: string, status: XOperationStatus): boolean {

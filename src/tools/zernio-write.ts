@@ -8,6 +8,7 @@ import type { XOperation } from "../storage/application-db.ts";
 import type { TrustedDeliveryContext } from "./types.ts";
 
 const content = v.pipe(v.string(), v.minLength(1), v.maxLength(25_000));
+const postId = v.pipe(v.string(), v.minLength(1), v.maxLength(200));
 
 export function zernioWriteTools(
   service: ZernioWriteService | undefined,
@@ -101,7 +102,7 @@ export function zernioWriteTools(
       name: "edit_x_post",
       description:
         "Edit one Zernio/X post where the provider supports it. Requires current matching edit authorization.",
-      input: v.object({ providerPostId: v.string(), content }),
+      input: v.object({ providerPostId: postId, content }),
       async run({ data }) {
         return {
           output: await execute({
@@ -116,7 +117,7 @@ export function zernioWriteTools(
       name: "cancel_scheduled_x_post",
       description:
         "Cancel one scheduled Zernio post. Requires current matching cancel authorization.",
-      input: v.object({ providerPostId: v.string() }),
+      input: v.object({ providerPostId: postId }),
       async run({ data }) {
         return {
           output: await execute({
@@ -130,7 +131,7 @@ export function zernioWriteTools(
       name: "delete_x_post",
       description:
         "Delete or unpublish one X/Zernio post. Requires current matching delete authorization.",
-      input: v.object({ providerPostId: v.string() }),
+      input: v.object({ providerPostId: postId }),
       async run({ data }) {
         return {
           output: await execute({

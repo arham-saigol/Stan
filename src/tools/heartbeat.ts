@@ -37,9 +37,10 @@ export function heartbeatTools(
           throw new Error(
             "The morning heartbeat must send one model-written message",
           );
-        database.database
+        const updated = database.database
           .prepare(
-            `UPDATE heartbeat_occurrences SET status = ?, notify = ?, message = ?, reason = ?, lease_until = NULL, updated_at = ? WHERE occurrence_id = ?`,
+            `UPDATE heartbeat_occurrences SET status = ?, notify = ?, message = ?, reason = ?, lease_until = NULL, updated_at = ?
+             WHERE occurrence_id = ? AND status = 'running'`,
           )
           .run(
             data.notify ? "ready" : "silent",
@@ -49,6 +50,8 @@ export function heartbeatTools(
             new Date().toISOString(),
             trusted.occurrenceId,
           );
+        if (updated.changes === 0)
+          throw new Error("The heartbeat occurrence is not owned or running");
         return { output: { accepted: true }, terminate: true };
       },
     }),

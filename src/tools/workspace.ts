@@ -33,27 +33,25 @@ export function workspaceTools(
       name: "edit_workspace_file",
       description:
         "Atomically replace exact text or append bounded text in one allowlisted operating document. Creates a repairable backup.",
-      input: v.variant("operation", [
-        v.object({
-          file: fileSchema,
-          operation: v.literal("replace"),
-          oldText: v.string(),
-          text: v.string(),
-        }),
-        v.object({
-          file: fileSchema,
-          operation: v.literal("append"),
-          text: v.string(),
-        }),
-      ]),
+      input: v.object({
+        file: fileSchema,
+        operation: v.picklist(["replace", "append"]),
+        oldText: v.optional(v.string()),
+        text: v.string(),
+      }),
       async run({ data }) {
-        const source =
-          trusted.sourceMessageId ?? trusted.occurrenceId ?? "system";
+        if (trusted.kind !== "owner" || !trusted.sourceMessageId)
+          throw new Error(
+            "Workspace edits require a current authenticated owner message",
+          );
+        const source = trusted.sourceMessageId;
+        if (data.operation === "replace" && data.oldText === undefined)
+          throw new Error("A replace edit requires oldText");
         const edit =
           data.operation === "replace"
             ? {
                 operation: "replace" as const,
-                oldText: data.oldText,
+                oldText: data.oldText!,
                 text: data.text,
               }
             : { operation: "append" as const, text: data.text };

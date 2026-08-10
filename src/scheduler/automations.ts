@@ -24,6 +24,11 @@ export interface ClaimedAutomationRun {
   scheduledFor: string;
 }
 
+export interface PendingAutomationNotification {
+  occurrenceId: string;
+  output: string;
+}
+
 export class AutomationStore {
   constructor(private readonly application: ApplicationDatabase) {}
 
@@ -186,7 +191,11 @@ export class AutomationStore {
 
   finishRun(
     occurrenceId: string,
-    result: { status: "completed" | "failed"; output?: string; error?: string },
+    result: {
+      status: "completed" | "failed" | "notification_pending";
+      output?: string;
+      error?: string;
+    },
   ): void {
     this.application.database
       .prepare(
@@ -199,6 +208,20 @@ export class AutomationStore {
         new Date().toISOString(),
         occurrenceId,
       );
+  }
+
+  pendingNotifications(limit = 5): PendingAutomationNotification[] {
+    return this.application.database
+      .prepare(
+        `SELECT occurrence_id, result FROM automation_runs
+         WHERE status = 'notification_pending' AND result IS NOT NULL
+         ORDER BY updated_at LIMIT ?`,
+      )
+      .all(limit)
+      .map((row) => {
+        const value = row as { occurrence_id: string; result: string };
+        return { occurrenceId: value.occurrence_id, output: value.result };
+      });
   }
 }
 

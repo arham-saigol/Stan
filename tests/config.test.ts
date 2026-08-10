@@ -45,4 +45,26 @@ describe("configuration", () => {
       readFile(join(root, "config.json"), "utf8"),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("serializes concurrent read-modify-write updates", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-config-"));
+    const store = new ConfigStore(root);
+    await store.write(createDefaultConfig({ ownerPhone: "+923001234567" }));
+
+    await Promise.all([
+      store.update((current) => ({
+        ...current,
+        heartbeat: { ...current.heartbeat, intervalMinutes: 60 },
+      })),
+      store.update((current) => ({
+        ...current,
+        heartbeat: { ...current.heartbeat, morningCatchupMinutes: 30 },
+      })),
+    ]);
+
+    expect(store.read().heartbeat).toMatchObject({
+      intervalMinutes: 60,
+      morningCatchupMinutes: 30,
+    });
+  });
 });

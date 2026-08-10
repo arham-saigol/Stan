@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Temporal } from "@js-temporal/polyfill";
+import pino from "pino";
+import { describe, expect, it, vi } from "vitest";
+import type { StanAgentRuntime } from "../src/agents/runtime.ts";
+import { ConfigStore, createDefaultConfig } from "../src/config/store.ts";
+import type { DeliveryService } from "../src/gateway/delivery.ts";
 import { AutomationStore } from "../src/scheduler/automations.ts";
+import { Scheduler } from "../src/scheduler/scheduler.ts";
 import { ApplicationDatabase } from "../src/storage/application-db.ts";
 
 describe("declarative automations", () => {
@@ -88,6 +97,60 @@ describe("declarative automations", () => {
 
     expect(store.claimDue(new Date("2026-08-13T04:00:00Z"))).toHaveLength(1);
     expect(store.claimDue(new Date("2026-08-13T04:00:00Z"))).toHaveLength(0);
+    database.close();
+  });
+
+  it("retries a completed automation reply without rerunning the agent", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-automation-"));
+    const config = new ConfigStore(root);
+    const initial = createDefaultConfig({ ownerPhone: "+923001234567" });
+    await config.write({
+      ...initial,
+      heartbeat: { ...initial.heartbeat, enabled: false },
+    });
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const automations = new AutomationStore(database);
+    automations.create({
+      name: "daily report",
+      schedule: { type: "once", at: "2026-08-13T04:00:00Z" },
+      instruction: "Prepare the report",
+      deliveryMode: "owner_whatsapp",
+      creatorMessageId: "owner-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const deliver = vi.fn(async () => "the finished report");
+    const sendOwner = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("WhatsApp offline"))
+      .mockResolvedValueOnce({ messageId: "out-1" });
+    const scheduler = new Scheduler(
+      database,
+      config,
+      { isBusy: () => false, deliver } as unknown as StanAgentRuntime,
+      { sendOwner } as unknown as DeliveryService,
+      automations,
+      pino({ level: "silent" }),
+    );
+
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T04:00:00Z"));
+    expect(
+      database.database
+        .prepare("SELECT status, result FROM automation_runs")
+        .get(),
+    ).toEqual({
+      status: "notification_pending",
+      result: "the finished report",
+    });
+
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T04:01:00Z"));
+    expect(
+      database.database
+        .prepare("SELECT status, result FROM automation_runs")
+        .get(),
+    ).toEqual({ status: "completed", result: "the finished report" });
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(sendOwner).toHaveBeenCalledTimes(2);
     database.close();
   });
 });
