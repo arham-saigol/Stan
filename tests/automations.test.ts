@@ -176,6 +176,67 @@ describe("declarative automations", () => {
     database.close();
   });
 
+  it("bounds persistent automation notification failures", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "stan-automation-notify-failure-"),
+    );
+    const config = new ConfigStore(root);
+    const initial = createDefaultConfig({ ownerPhone: "+923001234567" });
+    await config.write({
+      ...initial,
+      heartbeat: { ...initial.heartbeat, enabled: false },
+    });
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const automations = new AutomationStore(database);
+    automations.create({
+      name: "failing delivery",
+      schedule: { type: "once", at: "2026-08-13T04:00:00Z" },
+      instruction: "Prepare the report",
+      deliveryMode: "owner_whatsapp",
+      creatorMessageId: "owner-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const sendOwner = vi.fn(async () => {
+      throw new Error("WhatsApp unavailable");
+    });
+    const scheduler = new Scheduler(
+      database,
+      config,
+      {
+        isBusy: () => false,
+        dispatch: vi.fn(async () => "submission-1"),
+        read: vi.fn(async () => "finished report"),
+      } as unknown as StanAgentRuntime,
+      { sendOwner } as unknown as DeliveryService,
+      automations,
+      pino({ level: "silent" }),
+    );
+
+    for (const instant of [
+      "2026-08-13T04:00:00Z",
+      "2026-08-13T04:01:00Z",
+      "2026-08-13T04:03:00Z",
+      "2026-08-13T04:10:00Z",
+    ])
+      await scheduler.tick(Temporal.Instant.from(instant));
+
+    expect(sendOwner).toHaveBeenCalledTimes(3);
+    expect(
+      database.database
+        .prepare(
+          "SELECT status, attempts, lease_until, result FROM automation_runs",
+        )
+        .get(),
+    ).toEqual({
+      status: "failed",
+      attempts: 3,
+      lease_until: null,
+      result: "finished report",
+    });
+    database.close();
+  });
+
   it("recovers an expired run through its idempotent Flue submission", async () => {
     const root = await mkdtemp(join(tmpdir(), "stan-automation-recovery-"));
     const config = new ConfigStore(root);

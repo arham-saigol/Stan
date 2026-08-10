@@ -306,14 +306,51 @@ export class AutomationStore {
       );
   }
 
-  pendingNotifications(limit = 5): PendingAutomationNotification[] {
+  recordNotificationFailure(
+    occurrenceId: string,
+    output: string,
+    error: string,
+    now = new Date(),
+    firstAttempt = false,
+  ): void {
+    const row = this.application.database
+      .prepare("SELECT attempts FROM automation_runs WHERE occurrence_id = ?")
+      .get(occurrenceId) as { attempts: number } | undefined;
+    if (!row) return;
+    const attempts = firstAttempt ? 1 : row.attempts + 1;
+    const exhausted = attempts >= 3;
+    this.application.database
+      .prepare(
+        `UPDATE automation_runs SET status = ?, attempts = ?, result = ?, error = ?,
+         lease_until = ?, updated_at = ? WHERE occurrence_id = ?`,
+      )
+      .run(
+        exhausted ? "failed" : "notification_pending",
+        attempts,
+        output,
+        error,
+        exhausted
+          ? null
+          : new Date(
+              now.getTime() + 60_000 * 2 ** (attempts - 1),
+            ).toISOString(),
+        now.toISOString(),
+        occurrenceId,
+      );
+  }
+
+  pendingNotifications(
+    now = new Date(),
+    limit = 5,
+  ): PendingAutomationNotification[] {
     return this.application.database
       .prepare(
         `SELECT occurrence_id, result FROM automation_runs
-         WHERE status = 'notification_pending' AND result IS NOT NULL
+         WHERE status = 'notification_pending' AND result IS NOT NULL AND attempts < 3
+           AND (lease_until IS NULL OR lease_until <= ?)
          ORDER BY updated_at LIMIT ?`,
       )
-      .all(limit)
+      .all(now.toISOString(), limit)
       .map((row) => {
         const value = row as { occurrence_id: string; result: string };
         return { occurrenceId: value.occurrence_id, output: value.result };

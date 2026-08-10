@@ -111,4 +111,46 @@ describe("daily session rollover", () => {
     });
     database.close();
   });
+
+  it("closes a session once an owner turn exhausts recovery", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const logger = pino({ level: "silent" });
+    await repairDailyRollover(
+      database,
+      undefined,
+      logger,
+      Temporal.Instant.from("2026-08-13T18:59:00Z"),
+    );
+    database.claimInbound({
+      id: "exhausted-turn",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "lost turn",
+      receivedAt: "2026-08-13T18:59:30Z",
+    });
+    database.setInboundState("exhausted-turn", "dispatched", {
+      sessionId: "stan-owner-2026-08-13",
+    });
+    database.database
+      .prepare(
+        "UPDATE inbound_messages SET state = 'unknown', recovery_attempts = 3 WHERE provider_message_id = 'exhausted-turn'",
+      )
+      .run();
+
+    await repairDailyRollover(
+      database,
+      undefined,
+      logger,
+      Temporal.Instant.from("2026-08-13T19:02:00Z"),
+    );
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT state, transcript_complete FROM daily_sessions WHERE local_date = '2026-08-13'",
+        )
+        .get(),
+    ).toEqual({ state: "closed", transcript_complete: 1 });
+    database.close();
+  });
 });

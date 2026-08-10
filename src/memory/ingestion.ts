@@ -18,8 +18,13 @@ export async function ingestPendingMemory(
     .prepare(
       `INSERT INTO memory_documents(custom_id, local_date, conversation_id, content, complete, status, attempts, updated_at)
        VALUES (?, ?, ?, ?, ?, 'pending', 0, ?) ON CONFLICT(custom_id) DO UPDATE SET
+       provider_id = CASE WHEN memory_documents.content <> excluded.content THEN NULL ELSE memory_documents.provider_id END,
        conversation_id = excluded.conversation_id, content = excluded.content, complete = excluded.complete,
-       status = 'pending', updated_at = excluded.updated_at`,
+       status = 'pending',
+       attempts = CASE WHEN memory_documents.content <> excluded.content THEN 0 ELSE memory_documents.attempts END,
+       next_attempt_at = CASE WHEN memory_documents.content <> excluded.content THEN NULL ELSE memory_documents.next_attempt_at END,
+       last_error = CASE WHEN memory_documents.content <> excluded.content THEN NULL ELSE memory_documents.last_error END,
+       updated_at = excluded.updated_at`,
     )
     .run(
       customId,

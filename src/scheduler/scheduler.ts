@@ -336,7 +336,8 @@ export class Scheduler {
   }
 
   private async runAutomations(now: Temporal.Instant): Promise<void> {
-    for (const pending of this.automations.pendingNotifications()) {
+    const currentDate = new Date(now.epochMilliseconds);
+    for (const pending of this.automations.pendingNotifications(currentDate)) {
       try {
         await this.delivery.sendOwner(
           pending.output,
@@ -347,15 +348,15 @@ export class Scheduler {
           output: pending.output,
         });
       } catch (error) {
-        this.automations.finishRun(pending.occurrenceId, {
-          status: "notification_pending",
-          output: pending.output,
-          error: safeError(error),
-        });
+        this.automations.recordNotificationFailure(
+          pending.occurrenceId,
+          pending.output,
+          safeError(error),
+          currentDate,
+        );
       }
     }
     const claimed = this.automations.claimDue(new Date(now.epochMilliseconds));
-    const currentDate = new Date(now.epochMilliseconds);
     const runs = [...this.automations.recoverableRuns(currentDate), ...claimed];
     for (const run of runs) {
       let reply: string;
@@ -399,11 +400,13 @@ export class Scheduler {
             `automation:${run.occurrenceId}`,
           );
         } catch (error) {
-          this.automations.finishRun(run.occurrenceId, {
-            status: "notification_pending",
+          this.automations.recordNotificationFailure(
+            run.occurrenceId,
             output,
-            error: safeError(error),
-          });
+            safeError(error),
+            currentDate,
+            true,
+          );
           continue;
         }
       }

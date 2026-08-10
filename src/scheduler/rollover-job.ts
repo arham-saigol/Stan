@@ -24,7 +24,8 @@ export async function repairDailyRollover(
     const unsettled = database.database
       .prepare(
         `SELECT 1 FROM inbound_messages WHERE session_id = ? AND response_text IS NULL
-         AND state IN ('claimed', 'dispatched', 'failed', 'unknown') LIMIT 1`,
+         AND state IN ('claimed', 'dispatched', 'failed', 'unknown')
+         AND NOT (state = 'unknown' AND recovery_attempts >= 3) LIMIT 1`,
       )
       .get(previous.conversation_id);
     if (unsettled) continue;

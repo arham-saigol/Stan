@@ -64,6 +64,30 @@ describe("durable memory ingestion", () => {
     database.close();
   });
 
+  it("clears stale provider state when a transcript is refreshed", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const memory = {
+      ingestSession: vi
+        .fn()
+        .mockResolvedValueOnce({ id: "memory-old", status: "done" })
+        .mockRejectedValueOnce(new Error("provider unavailable")),
+    } as unknown as SupermemoryProvider;
+
+    await ingestPendingMemory(database, memory, input);
+    await ingestPendingMemory(database, memory, {
+      ...input,
+      transcript: `${input.transcript}\nowner: delayed turn`,
+    });
+
+    expect(
+      database.database
+        .prepare("SELECT provider_id, status, attempts FROM memory_documents")
+        .get(),
+    ).toEqual({ provider_id: null, status: "pending", attempts: 1 });
+    database.close();
+  });
+
   it("bounds retries when accepted provider documents later fail", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
