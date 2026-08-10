@@ -150,7 +150,9 @@ CREATE TABLE IF NOT EXISTS scheduled_publications (
   next_poll_at TEXT NOT NULL,
   last_status TEXT NOT NULL,
   notified_status TEXT,
-  poll_count INTEGER NOT NULL DEFAULT 0
+  poll_count INTEGER NOT NULL DEFAULT 0,
+  notification_message TEXT,
+  notification_attempts INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 CREATE TABLE IF NOT EXISTS heartbeat_occurrences (
   occurrence_id TEXT PRIMARY KEY,
@@ -303,6 +305,18 @@ export class ApplicationDatabase {
         this.database,
         "scheduled_publications",
         "poll_count",
+        "INTEGER NOT NULL DEFAULT 0",
+      );
+      addColumnIfMissing(
+        this.database,
+        "scheduled_publications",
+        "notification_message",
+        "TEXT",
+      );
+      addColumnIfMissing(
+        this.database,
+        "scheduled_publications",
+        "notification_attempts",
         "INTEGER NOT NULL DEFAULT 0",
       );
       addColumnIfMissing(
@@ -800,6 +814,44 @@ export class ApplicationDatabase {
         "Current owner authorization is required to update heartbeat settings",
       );
     }
+  }
+
+  rejectFormerOwnerInbound(sourceMessageId: string, now = new Date()): void {
+    const timestamp = now.toISOString();
+    this.transaction(() => {
+      this.database
+        .prepare(
+          `UPDATE inbound_messages SET state = 'unknown', recovery_attempts = 3,
+           next_retry_at = NULL, error = 'Sender is no longer the configured owner'
+           WHERE provider_message_id = ?`,
+        )
+        .run(sourceMessageId);
+      this.database
+        .prepare(
+          "UPDATE authorization_envelopes SET consumed_at = COALESCE(consumed_at, ?) WHERE source_message_id = ?",
+        )
+        .run(timestamp, sourceMessageId);
+      this.database
+        .prepare(
+          "UPDATE automation_authorizations SET consumed_at = COALESCE(consumed_at, ?) WHERE source_message_id = ?",
+        )
+        .run(timestamp, sourceMessageId);
+      this.database
+        .prepare(
+          "UPDATE workspace_authorizations SET consumed_at = COALESCE(consumed_at, ?) WHERE source_message_id = ?",
+        )
+        .run(timestamp, sourceMessageId);
+      this.database
+        .prepare(
+          "UPDATE memory_authorizations SET consumed_at = COALESCE(consumed_at, ?) WHERE source_message_id = ?",
+        )
+        .run(timestamp, sourceMessageId);
+      this.database
+        .prepare(
+          "UPDATE heartbeat_settings_authorizations SET consumed_at = COALESCE(consumed_at, ?) WHERE source_message_id = ?",
+        )
+        .run(timestamp, sourceMessageId);
+    });
   }
 
   getXOperation(logicalId: string): XOperation | undefined {

@@ -220,6 +220,36 @@ describe("owner-only ingress", () => {
     ).toEqual({ state: "delivered" });
   });
 
+  it("terminally rejects queued turns from a former configured owner", async () => {
+    const { database, ingress, dispatch } = await harness();
+    database.claimInbound({
+      id: "former-owner-turn",
+      senderIdentity: ownerJid,
+      body: "post it",
+      receivedAt: new Date().toISOString(),
+    });
+    const authorization = database.createAuthorization({
+      sourceMessageId: "former-owner-turn",
+      operation: "publish",
+      authorizedContent: "exact post",
+    });
+    database.configureOwnerIdentity("923111234567@s.whatsapp.net");
+
+    expect(await ingress.reconcilePending()).toBe(1);
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(
+      database.database
+        .prepare(
+          "SELECT state, recovery_attempts, next_retry_at FROM inbound_messages WHERE provider_message_id = 'former-owner-turn'",
+        )
+        .get(),
+    ).toEqual({ state: "unknown", recovery_attempts: 3, next_retry_at: null });
+    expect(
+      database.getAuthorization(authorization.id)?.consumedAt,
+    ).not.toBeNull();
+  });
+
   it("does not reconcile an owner message that this process is still handling", async () => {
     const { ingress, dispatch, read } = await harness();
     let release!: (value: string) => void;

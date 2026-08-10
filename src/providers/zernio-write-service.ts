@@ -342,7 +342,8 @@ export function trackProviderPoll(
       `INSERT INTO scheduled_publications(logical_operation_id, provider_id, next_poll_at, last_status)
        VALUES (?, ?, ?, ?) ON CONFLICT(logical_operation_id) DO UPDATE SET
        provider_id = excluded.provider_id, next_poll_at = excluded.next_poll_at,
-       last_status = excluded.last_status, poll_count = 0`,
+       last_status = excluded.last_status, poll_count = 0,
+       notification_message = NULL, notification_attempts = 0`,
     )
     .run(
       operation.logicalId,

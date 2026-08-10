@@ -18,9 +18,11 @@ export async function reconcileScheduledPublications(
 ): Promise<number> {
   const rows = database.database
     .prepare(
-      `SELECT s.logical_operation_id, s.provider_id, s.last_status, s.notified_status, s.poll_count, x.operation
+      `SELECT s.logical_operation_id, s.provider_id, s.last_status, s.notified_status, s.poll_count,
+              s.notification_message, s.notification_attempts, x.operation
        FROM scheduled_publications s JOIN x_operations x ON x.logical_id = s.logical_operation_id
-       WHERE s.next_poll_at <= ? ORDER BY s.next_poll_at LIMIT 10`,
+       WHERE s.next_poll_at <= ? AND s.notification_attempts < 3
+       ORDER BY s.next_poll_at LIMIT 10`,
     )
     .all(now.toISOString()) as {
     logical_operation_id: string;
@@ -28,9 +30,20 @@ export async function reconcileScheduledPublications(
     last_status: string;
     notified_status: string | null;
     poll_count: number;
+    notification_message: string | null;
+    notification_attempts: number;
     operation: string;
   }[];
   for (const row of rows) {
+    if (row.notification_message) {
+      await deliverTerminalNotification(
+        database,
+        delivery,
+        { ...row, notification_message: row.notification_message },
+        now,
+      );
+      continue;
+    }
     let post: Post;
     try {
       post = await provider.getPost(row.provider_id);
@@ -52,20 +65,30 @@ export async function reconcileScheduledPublications(
         status: "partial",
         error: `Provider verification failed after bounded polling: ${safeError(error)}`,
       });
-      await delivery.sendOwner(
-        renderStatus(
-          row.operation,
-          updated.status,
-          updated.publicUrl,
-          updated.error,
-        ),
-        `x-operation:${updated.logicalId}:${updated.status}`,
+      const message = renderStatus(
+        row.operation,
+        updated.status,
+        updated.publicUrl,
+        updated.error,
       );
-      database.database
-        .prepare(
-          "DELETE FROM scheduled_publications WHERE logical_operation_id = ?",
-        )
-        .run(row.logical_operation_id);
+      queueTerminalNotification(
+        database,
+        row.logical_operation_id,
+        updated.status,
+        message,
+        now,
+      );
+      await deliverTerminalNotification(
+        database,
+        delivery,
+        {
+          ...row,
+          last_status: updated.status,
+          notification_message: message,
+          notification_attempts: 0,
+        },
+        now,
+      );
       continue;
     }
     const target = post.platforms?.find(
@@ -92,23 +115,31 @@ export async function reconcileScheduledPublications(
     });
     const material =
       status !== row.last_status && isTerminal(row.operation, status);
-    if (material && row.notified_status !== status) {
-      await delivery.sendOwner(
-        renderStatus(
-          row.operation,
-          updated.status,
-          updated.publicUrl,
-          updated.error,
-        ),
-        `x-operation:${updated.logicalId}:${updated.status}`,
-      );
-    }
     if (isTerminal(row.operation, status)) {
-      database.database
-        .prepare(
-          "DELETE FROM scheduled_publications WHERE logical_operation_id = ?",
-        )
-        .run(row.logical_operation_id);
+      const message = renderStatus(
+        row.operation,
+        updated.status,
+        updated.publicUrl,
+        updated.error,
+      );
+      queueTerminalNotification(
+        database,
+        row.logical_operation_id,
+        status,
+        message,
+        now,
+      );
+      await deliverTerminalNotification(
+        database,
+        delivery,
+        {
+          ...row,
+          last_status: status,
+          notification_message: message,
+          notification_attempts: 0,
+        },
+        now,
+      );
     } else {
       database.database
         .prepare(
@@ -125,6 +156,62 @@ export async function reconcileScheduledPublications(
     }
   }
   return rows.length;
+}
+
+function queueTerminalNotification(
+  database: ApplicationDatabase,
+  logicalId: string,
+  status: XOperationStatus,
+  message: string,
+  now: Date,
+): void {
+  database.database
+    .prepare(
+      `UPDATE scheduled_publications SET last_status = ?, notified_status = ?,
+       notification_message = ?, notification_attempts = 0, next_poll_at = ?
+       WHERE logical_operation_id = ?`,
+    )
+    .run(status, status, message, now.toISOString(), logicalId);
+}
+
+async function deliverTerminalNotification(
+  database: ApplicationDatabase,
+  delivery: DeliveryService,
+  row: {
+    logical_operation_id: string;
+    last_status: string;
+    notification_message: string;
+    notification_attempts: number;
+  },
+  now: Date,
+): Promise<void> {
+  try {
+    await delivery.sendOwner(
+      row.notification_message,
+      `x-operation:${row.logical_operation_id}:${row.last_status}`,
+    );
+    database.database
+      .prepare(
+        "DELETE FROM scheduled_publications WHERE logical_operation_id = ?",
+      )
+      .run(row.logical_operation_id);
+  } catch {
+    const attempts = row.notification_attempts + 1;
+    database.database
+      .prepare(
+        `UPDATE scheduled_publications SET notification_attempts = ?, next_poll_at = ?
+         WHERE logical_operation_id = ?`,
+      )
+      .run(
+        attempts,
+        attempts >= 3
+          ? now.toISOString()
+          : new Date(
+              now.getTime() + 60_000 * 2 ** (attempts - 1),
+            ).toISOString(),
+        row.logical_operation_id,
+      );
+  }
 }
 
 function normalize(

@@ -121,6 +121,11 @@ export class OwnerIngress {
     let processed = 0;
     for (const row of rows) {
       if (this.processing.has(row.provider_message_id)) continue;
+      if (!this.database.isOwnerIdentity(row.sender_identity)) {
+        this.database.rejectFormerOwnerInbound(row.provider_message_id, now);
+        processed += 1;
+        continue;
+      }
       await this.process(
         {
           id: row.provider_message_id,

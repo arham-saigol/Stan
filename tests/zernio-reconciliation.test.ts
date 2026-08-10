@@ -454,14 +454,12 @@ describe("ambiguous Zernio operation reconciliation", () => {
       .mockResolvedValueOnce({ messageId: "out-1" });
     const delivery = { sendOwner } as unknown as DeliveryService;
 
-    await expect(
-      reconcileScheduledPublications(
-        database,
-        provider,
-        delivery,
-        new Date("2026-08-13T00:02:00Z"),
-      ),
-    ).rejects.toThrow("WhatsApp offline");
+    await reconcileScheduledPublications(
+      database,
+      provider,
+      delivery,
+      new Date("2026-08-13T00:02:00Z"),
+    );
     expect(database.getXOperation(operation.logicalId)!.status).toBe(
       "published",
     );
@@ -476,6 +474,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
       "published",
     );
     expect(sendOwner).toHaveBeenCalledTimes(2);
+    expect(provider.getPost).toHaveBeenCalledOnce();
     expect(
       database.database
         .prepare(
@@ -483,6 +482,77 @@ describe("ambiguous Zernio operation reconciliation", () => {
         )
         .get(operation.logicalId),
     ).toBeUndefined();
+    database.close();
+  });
+
+  it("bounds terminal scheduled-publication notification retries", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-1",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "post it",
+      receivedAt: "2026-08-13T00:00:00Z",
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-1",
+      operation: "publish",
+      authorizedContent: "hello",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const provider = {
+      mutate: vi.fn(async () => ({
+        status: "publishing" as const,
+        providerId: "z-1",
+      })),
+      getPost: vi.fn(async () => ({
+        status: "published" as const,
+        platforms: [
+          {
+            platform: "twitter" as const,
+            status: "published" as const,
+            platformPostId: "x-1",
+            platformPostUrl: "https://x.com/stan/status/x-1",
+          },
+        ],
+      })),
+    };
+    const operation = await new ZernioWriteService(database, provider).execute(
+      { sourceMessageId: "owner-1", selectedAccountId: "account-1" },
+      { operation: "publish", content: "hello" },
+    );
+    const sendOwner = vi.fn(async () => {
+      throw new Error("WhatsApp offline");
+    });
+    const delivery = { sendOwner } as unknown as DeliveryService;
+
+    for (const time of [
+      "2026-08-13T00:02:00Z",
+      "2026-08-13T00:03:00Z",
+      "2026-08-13T00:05:00Z",
+      "2026-08-13T00:10:00Z",
+    ])
+      await reconcileScheduledPublications(
+        database,
+        provider,
+        delivery,
+        new Date(time),
+      );
+
+    expect(provider.getPost).toHaveBeenCalledOnce();
+    expect(sendOwner).toHaveBeenCalledTimes(3);
+    const notification = database.database
+      .prepare(
+        "SELECT notification_attempts, notification_message FROM scheduled_publications WHERE logical_operation_id = ?",
+      )
+      .get(operation.logicalId) as {
+      notification_attempts: number;
+      notification_message: string;
+    };
+    expect(notification.notification_attempts).toBe(3);
+    expect(notification.notification_message).toContain(
+      "verified as published",
+    );
     database.close();
   });
 });

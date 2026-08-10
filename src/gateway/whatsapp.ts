@@ -16,7 +16,7 @@ export class WhatsAppGateway {
   private socket: WASocket | undefined;
   private stopping = false;
   private reconnectAttempt = 0;
-  private readonly inbound = new Set<Promise<void>>();
+  private inbound = Promise.resolve();
   private connection: "closed" | "connecting" | "open" = "closed";
 
   constructor(
@@ -36,7 +36,7 @@ export class WhatsAppGateway {
   }
 
   async drain(): Promise<void> {
-    await Promise.allSettled(this.inbound);
+    await this.inbound;
   }
 
   async stop(): Promise<void> {
@@ -93,18 +93,16 @@ export class WhatsAppGateway {
     });
     socket.ev.on("messages.upsert", ({ messages, type }) => {
       if (this.stopping || type !== "notify") return;
-      const task = (async () => {
-        for (const message of messages) {
-          const inbound = toInbound(message, type);
-          if (inbound) await this.ingress.handle(inbound);
-        }
-      })();
-      this.inbound.add(task);
-      void task
+      this.inbound = this.inbound
+        .then(async () => {
+          for (const message of messages) {
+            const inbound = toInbound(message, type);
+            if (inbound) await this.ingress.handle(inbound);
+          }
+        })
         .catch((error: unknown) => {
           this.logger.error({ error }, "WhatsApp ingress failed");
-        })
-        .finally(() => this.inbound.delete(task));
+        });
     });
     socket.ev.on("connection.update", (update) => {
       if (update.connection === "open") {
