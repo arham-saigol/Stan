@@ -21,13 +21,17 @@ export async function reconcilePendingXOperations(
   const rows = database.database
     .prepare(
       `SELECT logical_id FROM x_operations
-       WHERE status = 'publishing' AND next_retry_at IS NOT NULL AND next_retry_at <= ?
+       WHERE next_retry_at IS NOT NULL AND next_retry_at <= ?
        ORDER BY next_retry_at LIMIT 5`,
     )
     .all(now.toISOString()) as { logical_id: string }[];
   for (const row of rows) {
     const operation = database.getXOperation(row.logical_id);
     if (!operation) continue;
+    if (operation.status !== "publishing") {
+      await deliverTerminalResult(database, delivery, operation);
+      continue;
+    }
     let request: ZernioMutationRequest;
     let result: ProviderMutationResult;
     try {
@@ -51,7 +55,17 @@ export async function reconcilePendingXOperations(
       }
       continue;
     }
-    let updated = applyResult(database, operation, request, result);
+    let updated = database.transaction(() => {
+      const applied = applyResult(database, operation, request, result);
+      if (applied.status !== "publishing" && applied.status !== "scheduled") {
+        database.database
+          .prepare(
+            "UPDATE x_operations SET next_retry_at = ? WHERE logical_id = ?",
+          )
+          .run(now.toISOString(), applied.logicalId);
+      }
+      return applied;
+    });
     if (
       (updated.status === "publishing" || updated.status === "scheduled") &&
       updated.providerId
@@ -80,12 +94,25 @@ export async function reconcilePendingXOperations(
       }
       continue;
     }
-    await delivery.sendOwner(
-      renderResult(updated),
-      `x-operation:${updated.logicalId}:${updated.status}`,
-    );
+    await deliverTerminalResult(database, delivery, updated);
   }
   return rows.length;
+}
+
+async function deliverTerminalResult(
+  database: ApplicationDatabase,
+  delivery: DeliveryService,
+  operation: XOperation,
+): Promise<void> {
+  await delivery.sendOwner(
+    renderResult(operation),
+    `x-operation:${operation.logicalId}:${operation.status}`,
+  );
+  database.database
+    .prepare(
+      "UPDATE x_operations SET next_retry_at = NULL WHERE logical_id = ?",
+    )
+    .run(operation.logicalId);
 }
 
 function applyResult(

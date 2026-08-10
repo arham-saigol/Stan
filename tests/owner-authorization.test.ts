@@ -17,6 +17,9 @@ describe("owner X authorization classification", () => {
       deriveAuthorizationOperation("Schedule a research reminder"),
     ).toBeUndefined();
     expect(
+      deriveAuthorizationOperation("Schedule this reminder for tomorrow"),
+    ).toBeUndefined();
+    expect(
       deriveAuthorizationOperation("Reply with the setup steps"),
     ).toBeUndefined();
   });

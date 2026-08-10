@@ -98,7 +98,7 @@ export class OwnerIngress {
       .prepare(
         `SELECT provider_message_id, sender_identity, body, quoted_text, received_at, session_id, flue_submission_id
          FROM inbound_messages
-         WHERE state IN ('claimed', 'dispatched', 'unknown') AND response_text IS NULL
+         WHERE state IN ('claimed', 'dispatched', 'failed', 'unknown') AND response_text IS NULL
          ORDER BY received_at LIMIT ?`,
       )
       .all(limit) as {

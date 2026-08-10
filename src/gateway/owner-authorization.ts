@@ -28,9 +28,7 @@ export function deriveAuthorizationOperation(
     return futureTime.test(normalized) ? "schedule" : "publish";
   }
   if (operation === "schedule" || operation === "queue") {
-    return /\b(?:x|post|tweet|this|that|it|content|draft)\b/i.test(normalized)
-      ? "schedule"
-      : undefined;
+    return /\b(?:x|post|tweet)\b/i.test(normalized) ? "schedule" : undefined;
   }
   if (operation === "reply" || operation === "respond") {
     return /\b(?:x|post|tweet|this|that|it|thread)\b|@\w+|https?:\/\//i.test(

@@ -166,6 +166,27 @@ describe("owner-only ingress", () => {
     ).toEqual({ state: "delivered" });
   });
 
+  it("retries an admitted submission that failed before producing a response", async () => {
+    const { database, ingress, dispatch, read, send } = await harness();
+    read.mockRejectedValueOnce(new Error("Flue temporarily unavailable"));
+
+    expect(await ingress.handle(message({ id: "retry-me" }))).toEqual({
+      status: "failed",
+    });
+    expect(await ingress.reconcilePending()).toBe(1);
+
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledOnce();
+    expect(
+      database.database
+        .prepare(
+          "SELECT state FROM inbound_messages WHERE provider_message_id = 'retry-me'",
+        )
+        .get(),
+    ).toEqual({ state: "delivered" });
+  });
+
   it("derives one expiring publish envelope from an explicit owner command", async () => {
     const { ingress, database, deliveries } = await harness();
 
