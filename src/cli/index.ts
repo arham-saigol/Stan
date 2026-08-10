@@ -6,6 +6,7 @@ import { apisAuthCommand } from "./commands/apis-auth.ts";
 import { doctorCommand } from "./commands/doctor.ts";
 import { logsCommand } from "./commands/logs.ts";
 import {
+  getDaemonStatus,
   installAutostart,
   startService,
   stopService,
@@ -129,19 +130,20 @@ whatsapp
     action(async (options: { method?: "qr" | "pairing" }) => {
       const stateRoot = root();
       await initializeStateRoot(stateRoot);
-      await stopService(stateRoot);
-      const database = new ApplicationDatabase(
-        statePaths(stateRoot).applicationDb,
-      );
-      database.migrate();
+      const daemonWasRunning = Boolean(await getDaemonStatus(stateRoot));
+      if (daemonWasRunning) await stopService(stateRoot);
+      let database: ApplicationDatabase | undefined;
       try {
+        database = new ApplicationDatabase(statePaths(stateRoot).applicationDb);
+        database.migrate();
         await authenticateWhatsApp(
           database,
           new ConfigStore(stateRoot).read(),
           options.method,
         );
       } finally {
-        database.close();
+        database?.close();
+        if (daemonWasRunning) await startService(stateRoot);
       }
     }),
   );

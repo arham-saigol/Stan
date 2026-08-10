@@ -305,6 +305,33 @@ describe("Zernio public-write boundary", () => {
     database.close();
   });
 
+  it("keeps an incomplete provider-backed create pollable", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    authorized(database);
+    const service = new ZernioWriteService(database, {
+      mutate: vi.fn(async () => ({
+        status: "published" as const,
+        providerId: "z-incomplete",
+      })),
+    });
+
+    const result = await service.execute(
+      { sourceMessageId: "owner-1", selectedAccountId: "account-1" },
+      { operation: "publish", content: "hello" },
+    );
+
+    expect(result.status).toBe("partial");
+    expect(
+      database.database
+        .prepare(
+          "SELECT provider_id FROM scheduled_publications WHERE logical_operation_id = ?",
+        )
+        .get(result.logicalId),
+    ).toEqual({ provider_id: "z-incomplete" });
+    database.close();
+  });
+
   it("never reports published without a verified public id and URL", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

@@ -67,7 +67,9 @@ CREATE TABLE IF NOT EXISTS inbound_messages (
   flue_submission_id TEXT,
   response_text TEXT,
   outbound_message_id TEXT,
-  error TEXT
+  error TEXT,
+  recovery_attempts INTEGER NOT NULL DEFAULT 0,
+  next_retry_at TEXT
 ) STRICT;
 CREATE TABLE IF NOT EXISTS authorization_envelopes (
   id TEXT PRIMARY KEY,
@@ -231,6 +233,18 @@ export class ApplicationDatabase {
       );
       addColumnIfMissing(
         this.database,
+        "inbound_messages",
+        "recovery_attempts",
+        "INTEGER NOT NULL DEFAULT 0",
+      );
+      addColumnIfMissing(
+        this.database,
+        "inbound_messages",
+        "next_retry_at",
+        "TEXT",
+      );
+      addColumnIfMissing(
+        this.database,
         "authorization_envelopes",
         "target_post_id",
         "TEXT",
@@ -353,6 +367,8 @@ export class ApplicationDatabase {
         `UPDATE inbound_messages SET state = ?, session_id = COALESCE(?, session_id),
          flue_submission_id = COALESCE(?, flue_submission_id), response_text = COALESCE(?, response_text),
          outbound_message_id = COALESCE(?, outbound_message_id), error = COALESCE(?, error)
+         , recovery_attempts = CASE WHEN ? = 'reply_pending' THEN 0 ELSE recovery_attempts END
+         , next_retry_at = CASE WHEN ? = 'reply_pending' THEN NULL ELSE next_retry_at END
          WHERE provider_message_id = ?`,
       )
       .run(
@@ -362,6 +378,35 @@ export class ApplicationDatabase {
         values.responseText ?? null,
         values.outboundMessageId ?? null,
         values.error ?? null,
+        state,
+        state,
+        id,
+      );
+  }
+
+  recordInboundFailure(id: string, error: string, now = new Date()): void {
+    const row = this.database
+      .prepare(
+        "SELECT recovery_attempts FROM inbound_messages WHERE provider_message_id = ?",
+      )
+      .get(id) as { recovery_attempts: number } | undefined;
+    if (!row) return;
+    const attempts = row.recovery_attempts + 1;
+    const exhausted = attempts >= 3;
+    this.database
+      .prepare(
+        `UPDATE inbound_messages SET state = ?, recovery_attempts = ?, next_retry_at = ?, error = ?
+         WHERE provider_message_id = ?`,
+      )
+      .run(
+        exhausted ? "unknown" : "failed",
+        attempts,
+        exhausted
+          ? null
+          : new Date(
+              now.getTime() + 60_000 * 2 ** (attempts - 1),
+            ).toISOString(),
+        error,
         id,
       );
   }

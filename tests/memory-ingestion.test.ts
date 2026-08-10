@@ -94,4 +94,44 @@ describe("durable memory ingestion", () => {
     ).toEqual({ status: "failed", attempts: 3, next_attempt_at: null });
     database.close();
   });
+
+  it("bounds permanent provider status lookup failures", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const memory = {
+      ingestSession: vi.fn(async () => ({ id: "memory-1", status: "pending" })),
+      status: vi.fn(async () => {
+        throw new Error(
+          "GET https://memory.example/status?api_key=secret failed",
+        );
+      }),
+    } as unknown as SupermemoryProvider;
+
+    await ingestPendingMemory(database, memory, input);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      database.database.exec(
+        "UPDATE memory_documents SET next_attempt_at = '2000-01-01T00:00:00Z' WHERE status != 'failed'",
+      );
+      await reconcilePendingMemory(database, memory);
+    }
+
+    expect(memory.status).toHaveBeenCalledTimes(2);
+    const row = database.database
+      .prepare(
+        "SELECT status, attempts, next_attempt_at, last_error FROM memory_documents",
+      )
+      .get() as {
+      status: string;
+      attempts: number;
+      next_attempt_at: string | null;
+      last_error: string;
+    };
+    expect(row).toMatchObject({
+      status: "failed",
+      attempts: 3,
+      next_attempt_at: null,
+    });
+    expect(row.last_error).not.toContain("secret");
+    database.close();
+  });
 });

@@ -94,15 +94,16 @@ export class OwnerIngress {
     return this.process(message);
   }
 
-  async reconcilePending(limit = 5): Promise<number> {
+  async reconcilePending(limit = 5, now = new Date()): Promise<number> {
     const rows = this.database.database
       .prepare(
         `SELECT provider_message_id, sender_identity, body, quoted_text, received_at, session_id, flue_submission_id
          FROM inbound_messages
          WHERE state IN ('claimed', 'dispatched', 'failed', 'unknown') AND response_text IS NULL
+           AND recovery_attempts < 3 AND (next_retry_at IS NULL OR next_retry_at <= ?)
          ORDER BY received_at LIMIT ?`,
       )
-      .all(limit) as {
+      .all(now.toISOString(), limit) as {
       provider_message_id: string;
       sender_identity: string;
       body: string;
@@ -126,6 +127,7 @@ export class OwnerIngress {
         },
         row.session_id ?? undefined,
         row.flue_submission_id ?? undefined,
+        now,
       );
       processed += 1;
     }
@@ -136,6 +138,7 @@ export class OwnerIngress {
     message: InboundMessage,
     persistedSessionId?: string,
     persistedSubmissionId?: string,
+    now = new Date(),
   ): Promise<{ status: "delivered" | "failed" }> {
     this.processing.add(message.id);
     try {
@@ -187,9 +190,7 @@ export class OwnerIngress {
       });
       return { status: "delivered" };
     } catch (error) {
-      this.database.setInboundState(message.id, "failed", {
-        error: safeError(error),
-      });
+      this.database.recordInboundFailure(message.id, safeError(error), now);
       return { status: "failed" };
     } finally {
       this.processing.delete(message.id);
@@ -211,15 +212,20 @@ function isDirectIdentity(identity: string): boolean {
 export async function reconcilePendingReplies(
   database: ApplicationDatabase,
   delivery: DeliveryService,
+  now = new Date(),
 ): Promise<number> {
   const rows = database.database
     .prepare(
       `SELECT provider_message_id, response_text FROM inbound_messages
        WHERE state IN ('reply_pending', 'failed', 'unknown')
          AND response_text IS NOT NULL AND outbound_message_id IS NULL
+         AND recovery_attempts < 3 AND (next_retry_at IS NULL OR next_retry_at <= ?)
        ORDER BY received_at LIMIT 5`,
     )
-    .all() as { provider_message_id: string; response_text: string }[];
+    .all(now.toISOString()) as {
+    provider_message_id: string;
+    response_text: string;
+  }[];
   for (const row of rows) {
     try {
       const outbound = await delivery.sendOwner(
@@ -230,9 +236,11 @@ export async function reconcilePendingReplies(
         outboundMessageId: outbound.messageId,
       });
     } catch (error) {
-      database.setInboundState(row.provider_message_id, "failed", {
-        error: safeError(error),
-      });
+      database.recordInboundFailure(
+        row.provider_message_id,
+        safeError(error),
+        now,
+      );
     }
   }
   return rows.length;

@@ -105,12 +105,26 @@ export async function reconcilePendingMemory(
             .run(new Date().toISOString(), row.custom_id);
           continue;
         }
-      } catch {
+      } catch (error) {
+        const attempts = row.attempts + 1;
+        const exhausted = attempts >= 3;
+        const message =
+          error instanceof Error
+            ? String(redactForLogging(error.message)).slice(0, 500)
+            : "Memory status lookup failed";
         database.database
           .prepare(
-            "UPDATE memory_documents SET next_attempt_at = ? WHERE custom_id = ?",
+            `UPDATE memory_documents SET status = ?, attempts = ?, next_attempt_at = ?,
+             last_error = ?, updated_at = ? WHERE custom_id = ?`,
           )
-          .run(new Date(Date.now() + 15 * 60_000).toISOString(), row.custom_id);
+          .run(
+            exhausted ? "failed" : row.status,
+            attempts,
+            exhausted ? null : new Date(Date.now() + 15 * 60_000).toISOString(),
+            message,
+            new Date().toISOString(),
+            row.custom_id,
+          );
         continue;
       }
     }

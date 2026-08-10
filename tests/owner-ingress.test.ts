@@ -149,7 +149,9 @@ describe("owner-only ingress", () => {
       flueSubmissionId: "submission-existing",
     });
 
-    expect(await ingress.reconcilePending()).toBe(1);
+    expect(
+      await ingress.reconcilePending(5, new Date(Date.now() + 61_000)),
+    ).toBe(1);
 
     expect(dispatch).not.toHaveBeenCalled();
     expect(read).toHaveBeenCalledWith(
@@ -166,6 +168,35 @@ describe("owner-only ingress", () => {
     ).toEqual({ state: "delivered" });
   });
 
+  it("bounds permanently failing owner-turn recovery", async () => {
+    const { database, ingress, dispatch, read } = await harness();
+    read.mockRejectedValue(new Error("Flue unavailable"));
+
+    expect(await ingress.handle(message({ id: "never-recovers" }))).toEqual({
+      status: "failed",
+    });
+    const started = Date.now();
+    expect(await ingress.reconcilePending(5, new Date(started + 61_000))).toBe(
+      1,
+    );
+    expect(
+      await ingress.reconcilePending(5, new Date(started + 4 * 60_000)),
+    ).toBe(1);
+    expect(
+      await ingress.reconcilePending(5, new Date(started + 10 * 60_000)),
+    ).toBe(0);
+
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(
+      database.database
+        .prepare(
+          "SELECT state, recovery_attempts, next_retry_at FROM inbound_messages WHERE provider_message_id = 'never-recovers'",
+        )
+        .get(),
+    ).toEqual({ state: "unknown", recovery_attempts: 3, next_retry_at: null });
+  });
+
   it("retries an admitted submission that failed before producing a response", async () => {
     const { database, ingress, dispatch, read, send } = await harness();
     read.mockRejectedValueOnce(new Error("Flue temporarily unavailable"));
@@ -173,7 +204,9 @@ describe("owner-only ingress", () => {
     expect(await ingress.handle(message({ id: "retry-me" }))).toEqual({
       status: "failed",
     });
-    expect(await ingress.reconcilePending()).toBe(1);
+    expect(
+      await ingress.reconcilePending(5, new Date(Date.now() + 61_000)),
+    ).toBe(1);
 
     expect(dispatch).toHaveBeenCalledOnce();
     expect(read).toHaveBeenCalledTimes(2);

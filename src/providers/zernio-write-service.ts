@@ -180,7 +180,9 @@ export class ZernioWriteService {
       }
       if (
         isRetryableCreate(request.operation) &&
-        (updated.status === "scheduled" || updated.status === "publishing") &&
+        (updated.status === "scheduled" ||
+          updated.status === "publishing" ||
+          updated.status === "partial") &&
         updated.providerId
       ) {
         trackProviderPoll(this.database, updated, new Date());
