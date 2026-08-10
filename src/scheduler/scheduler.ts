@@ -76,6 +76,7 @@ export class Scheduler {
     config: StanConfig,
     now: Temporal.Instant,
   ): Promise<void> {
+    await this.retryHeartbeatNotifications(now);
     if (!config.heartbeat.enabled) return;
     const completed = new Set(
       (
@@ -199,6 +200,11 @@ export class Scheduler {
             return;
           }
         }
+        this.database.database
+          .prepare(
+            "UPDATE heartbeat_occurrences SET status = 'ready', notify = 1, message = ?, updated_at = ? WHERE occurrence_id = ?",
+          )
+          .run(message, new Date().toISOString(), occurrence.id);
         await this.delivery.sendOwner(message, `heartbeat:${occurrence.id}`);
         this.database.database
           .prepare(
@@ -225,6 +231,49 @@ export class Scheduler {
         { occurrenceId: occurrence.id, error: safeError(error) },
         "Heartbeat failed",
       );
+    }
+  }
+
+  private async retryHeartbeatNotifications(
+    now: Temporal.Instant,
+  ): Promise<void> {
+    const pending = this.database.database
+      .prepare(
+        `SELECT occurrence_id, local_date, kind, message FROM heartbeat_occurrences
+         WHERE status IN ('failed', 'ready') AND notify = 1 AND message IS NOT NULL
+         ORDER BY updated_at LIMIT 5`,
+      )
+      .all() as {
+      occurrence_id: string;
+      local_date: string;
+      kind: "morning" | "regular";
+      message: string;
+    }[];
+    for (const occurrence of pending) {
+      try {
+        await this.delivery.sendOwner(
+          occurrence.message,
+          `heartbeat:${occurrence.occurrence_id}`,
+        );
+        this.database.database
+          .prepare(
+            "UPDATE heartbeat_occurrences SET status = 'notified', lease_until = NULL, updated_at = ? WHERE occurrence_id = ?",
+          )
+          .run(now.toString(), occurrence.occurrence_id);
+        if (occurrence.kind === "regular") {
+          recordProactiveSuggestion(
+            this.database,
+            occurrence.message,
+            new Date(now.epochMilliseconds),
+          );
+        }
+      } catch (error) {
+        this.database.database
+          .prepare(
+            "UPDATE heartbeat_occurrences SET reason = ?, updated_at = ? WHERE occurrence_id = ?",
+          )
+          .run(safeError(error), now.toString(), occurrence.occurrence_id);
+      }
     }
   }
 

@@ -1,5 +1,10 @@
 import type { AuthorizationOperation } from "../storage/application-db.ts";
 
+export interface DerivedAuthorization {
+  operation: AuthorizationOperation;
+  targetPostId?: string;
+}
+
 const prefixes =
   /^(?:(?:(?:yes|okay|ok|please|stan)[,.!]?|(?:can|could|would)\s+you|go\s+ahead(?:\s+and)?)\s+)*/i;
 const command =
@@ -57,4 +62,34 @@ export function deriveAuthorizationOperation(
       : undefined;
   }
   return operation as AuthorizationOperation;
+}
+
+export function deriveAuthorization(
+  text: string,
+  quotedText?: string,
+): DerivedAuthorization | undefined {
+  const operation = deriveAuthorizationOperation(text);
+  if (!operation) return undefined;
+  if (!isTargetedMutation(operation)) return { operation };
+  const targetPostId = extractTargetPostId(`${text}\n${quotedText ?? ""}`);
+  return targetPostId ? { operation, targetPostId } : undefined;
+}
+
+function isTargetedMutation(operation: AuthorizationOperation): boolean {
+  return (
+    operation === "edit" || operation === "cancel" || operation === "delete"
+  );
+}
+
+function extractTargetPostId(text: string): string | undefined {
+  const statusUrl =
+    /https?:\/\/(?:www\.)?(?:x\.com|twitter\.com)\/[^\s/]+\/status\/([A-Za-z0-9_-]{1,200})/i.exec(
+      text,
+    );
+  if (statusUrl) return statusUrl[1];
+  const labelled =
+    /\b(?:provider(?:\s+post)?|zernio(?:\s+post)?|(?:x\s+)?(?:post|tweet))(?:\s+id)?\s*[:#]?\s+([A-Za-z_-]*\d[A-Za-z0-9_-]{0,199})\b/i.exec(
+      text,
+    );
+  return labelled?.[1];
 }

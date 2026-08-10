@@ -9,6 +9,16 @@ import {
 } from "../src/providers/zernio-write-service.ts";
 import { ApplicationDatabase } from "../src/storage/application-db.ts";
 
+function setOperationCreatedAt(
+  database: ApplicationDatabase,
+  logicalId: string,
+  createdAt = "2026-08-13T00:00:00Z",
+): void {
+  database.database
+    .prepare("UPDATE x_operations SET created_at = ? WHERE logical_id = ?")
+    .run(createdAt, logicalId);
+}
+
 describe("ambiguous Zernio operation reconciliation", () => {
   it("persists the request and retries it with the same provider request id", async () => {
     const database = new ApplicationDatabase(":memory:");
@@ -55,6 +65,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
       },
       { operation: "publish", content: "hello" },
     );
+    setOperationCreatedAt(database, initial.logicalId);
     const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
 
     await reconcilePendingXOperations(
@@ -105,6 +116,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
       { sourceMessageId: "owner-1", selectedAccountId: "account-1" },
       { operation: "publish", content: "hello" },
     );
+    setOperationCreatedAt(database, initial.logicalId);
     const sendOwner = vi
       .fn()
       .mockRejectedValueOnce(new Error("WhatsApp disconnected"))
@@ -160,6 +172,11 @@ describe("ambiguous Zernio operation reconciliation", () => {
       { sourceMessageId: "owner-1", selectedAccountId: "account-1" },
       { operation: "publish", content: "hello" },
     );
+    setOperationCreatedAt(
+      database,
+      operation.logicalId,
+      "2026-08-13T00:01:00Z",
+    );
     const sendOwner = vi
       .fn()
       .mockRejectedValueOnce(new Error("WhatsApp disconnected"))
@@ -197,6 +214,53 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.close();
   });
 
+  it("does not retry an ambiguous create after the provider deduplication window", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-1",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "post it",
+      receivedAt: "2026-08-13T00:00:00Z",
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-1",
+      operation: "publish",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const provider: ZernioMutationProvider = {
+      mutate: vi.fn(async () => {
+        throw new Error("connection reset");
+      }),
+    };
+    const operation = await new ZernioWriteService(database, provider).execute(
+      { sourceMessageId: "owner-1", selectedAccountId: "account-1" },
+      { operation: "publish", content: "hello" },
+    );
+    setOperationCreatedAt(database, operation.logicalId);
+    database.database
+      .prepare(
+        "UPDATE x_operations SET created_at = ?, next_retry_at = ? WHERE logical_id = ?",
+      )
+      .run("2026-08-13T00:00:00Z", "2026-08-13T00:01:00Z", operation.logicalId);
+    const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
+
+    await reconcilePendingXOperations(
+      database,
+      provider,
+      { sendOwner } as unknown as DeliveryService,
+      new Date("2026-08-13T00:06:00Z"),
+    );
+
+    expect(provider.mutate).toHaveBeenCalledOnce();
+    expect(sendOwner).toHaveBeenCalledOnce();
+    expect(database.getXOperation(operation.logicalId)).toMatchObject({
+      retryCount: 3,
+      nextRetryAt: null,
+    });
+    database.close();
+  });
+
   it("retries a verified schedule notification without repeating the provider mutation", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
@@ -231,6 +295,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
         scheduledFor: "2026-08-14T00:00:00Z",
       },
     );
+    setOperationCreatedAt(database, initial.logicalId);
     const sendOwner = vi
       .fn()
       .mockRejectedValueOnce(new Error("WhatsApp disconnected"))

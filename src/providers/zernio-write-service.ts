@@ -76,14 +76,15 @@ export class ZernioWriteService {
         payloadHash,
         accountId: context.selectedAccountId,
         requestJson: stableJson(request),
+        ...(targetPostId ? { targetPostId } : {}),
       });
+    const targetPostId =
+      "providerPostId" in request ? request.providerPostId : undefined;
     const existing = this.database.getXOperationByEnvelope(envelope.id);
     if (existing) {
       const operation = begin();
       return operation;
     }
-    const targetPostId =
-      "providerPostId" in request ? request.providerPostId : undefined;
     if ("providerPostId" in request && !targetPostId?.trim())
       throw new Error("A target X post ID is required");
     if (targetPostId) {

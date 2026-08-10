@@ -69,4 +69,71 @@ describe("heartbeat execution", () => {
     expect(agent.deliver).toHaveBeenCalledTimes(2);
     database.close();
   });
+
+  it("retries a regular heartbeat notification without rerunning the agent", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-heartbeat-retry-"));
+    const config = new ConfigStore(root);
+    await config.write(createDefaultConfig({ ownerPhone: "+923001234567" }));
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const sendOwner = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("WhatsApp offline"))
+      .mockResolvedValueOnce({ messageId: "out-1" });
+    const deliver = vi.fn(
+      async (_id: string, message: { attributes?: Record<string, string> }) => {
+        database.database
+          .prepare(
+            "UPDATE heartbeat_occurrences SET status = 'ready', notify = 1, message = ? WHERE occurrence_id = ?",
+          )
+          .run("One useful interruption", message.attributes!.occurrenceId!);
+        return "One useful interruption";
+      },
+    );
+    const scheduler = new Scheduler(
+      database,
+      config,
+      { isBusy: () => false, deliver } as unknown as StanAgentRuntime,
+      { sendOwner } as unknown as DeliveryService,
+      new AutomationStore(database),
+      pino({ level: "silent" }),
+    );
+
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T07:00:00Z"));
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T07:01:00Z"));
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(sendOwner).toHaveBeenCalledTimes(2);
+    expect(
+      database.database
+        .prepare("SELECT status FROM heartbeat_occurrences")
+        .get(),
+    ).toEqual({ status: "notified" });
+
+    database.database
+      .prepare(
+        `INSERT INTO heartbeat_occurrences(occurrence_id, local_date, scheduled_for, kind, status, notify, message, created_at, updated_at)
+         VALUES (?, ?, ?, 'regular', 'ready', 1, ?, ?, ?)`,
+      )
+      .run(
+        "heartbeat:2026-08-13:crash",
+        "2026-08-13",
+        "2026-08-13T07:01:30Z",
+        "Persisted before a daemon exit",
+        "2026-08-13T07:01:30Z",
+        "2026-08-13T07:01:30Z",
+      );
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T07:02:00Z"));
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(sendOwner).toHaveBeenCalledTimes(3);
+    expect(
+      database.database
+        .prepare(
+          "SELECT status FROM heartbeat_occurrences WHERE occurrence_id = 'heartbeat:2026-08-13:crash'",
+        )
+        .get(),
+    ).toEqual({ status: "notified" });
+    database.close();
+  });
 });

@@ -36,6 +36,21 @@ export async function reconcilePendingXOperations(
       await deliverUnknownResult(database, delivery, operation);
       continue;
     }
+    if (now.getTime() - Date.parse(operation.createdAt) >= 5 * 60_000) {
+      database.database
+        .prepare(
+          `UPDATE x_operations SET retry_count = 3, next_retry_at = ?,
+           error = 'Provider create deduplication window expired before reconciliation', updated_at = ?
+           WHERE logical_id = ?`,
+        )
+        .run(now.toISOString(), now.toISOString(), operation.logicalId);
+      await deliverUnknownResult(
+        database,
+        delivery,
+        database.getXOperation(operation.logicalId)!,
+      );
+      continue;
+    }
     let request: ZernioMutationRequest;
     let result: ProviderMutationResult;
     try {
@@ -111,8 +126,11 @@ async function deliverUnknownResult(
   delivery: DeliveryService,
   operation: XOperation,
 ): Promise<void> {
+  const message = operation.error?.includes("deduplication window expired")
+    ? `I did not retry the uncertain X ${operation.operation} because Zernio's create-deduplication window had expired. Its outcome is still unknown; check Zernio/X before trying it again.`
+    : `I could not verify the ${operation.operation} request after bounded retries. Its outcome is still unknown; check Zernio/X before trying it again.`;
   await delivery.sendOwner(
-    `I could not verify the ${operation.operation} request after bounded retries. Its outcome is still unknown; check Zernio/X before trying it again.`,
+    message,
     `x-operation:${operation.logicalId}:unknown`,
   );
   database.database

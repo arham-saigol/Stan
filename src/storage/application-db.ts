@@ -24,6 +24,7 @@ export interface AuthorizationEnvelope {
   operation: AuthorizationOperation;
   sourceMessageId: string;
   quotedText: string | null;
+  targetPostId: string | null;
   createdAt: string;
   expiresAt: string;
   consumedAt: string | null;
@@ -73,6 +74,7 @@ CREATE TABLE IF NOT EXISTS authorization_envelopes (
   source_message_id TEXT NOT NULL UNIQUE REFERENCES inbound_messages(provider_message_id),
   operation TEXT NOT NULL CHECK (operation IN ('draft', 'publish', 'schedule', 'reply', 'edit', 'cancel', 'delete')),
   quoted_text TEXT,
+  target_post_id TEXT,
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   consumed_at TEXT
@@ -228,6 +230,12 @@ export class ApplicationDatabase {
       );
       addColumnIfMissing(
         this.database,
+        "authorization_envelopes",
+        "target_post_id",
+        "TEXT",
+      );
+      addColumnIfMissing(
+        this.database,
         "scheduled_publications",
         "poll_count",
         "INTEGER NOT NULL DEFAULT 0",
@@ -355,6 +363,7 @@ export class ApplicationDatabase {
     sourceMessageId: string;
     operation: AuthorizationOperation;
     quotedText?: string;
+    targetPostId?: string;
     now?: Date;
   }): AuthorizationEnvelope {
     const now = input.now ?? new Date();
@@ -363,20 +372,22 @@ export class ApplicationDatabase {
       operation: input.operation,
       sourceMessageId: input.sourceMessageId,
       quotedText: input.quotedText ?? null,
+      targetPostId: input.targetPostId ?? null,
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + 15 * 60_000).toISOString(),
       consumedAt: null,
     };
     this.database
       .prepare(
-        `INSERT INTO authorization_envelopes(id, source_message_id, operation, quoted_text, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO authorization_envelopes(id, source_message_id, operation, quoted_text, target_post_id, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         envelope.id,
         envelope.sourceMessageId,
         envelope.operation,
         envelope.quotedText,
+        envelope.targetPostId,
         envelope.createdAt,
         envelope.expiresAt,
       );
@@ -388,7 +399,7 @@ export class ApplicationDatabase {
   ): AuthorizationEnvelope | undefined {
     const row = this.database
       .prepare(
-        `SELECT id, operation, source_message_id, quoted_text, created_at, expires_at, consumed_at
+        `SELECT id, operation, source_message_id, quoted_text, target_post_id, created_at, expires_at, consumed_at
          FROM authorization_envelopes WHERE source_message_id = ?`,
       )
       .get(sourceMessageId) as Record<string, string | null> | undefined;
@@ -398,7 +409,7 @@ export class ApplicationDatabase {
   getAuthorization(id: string): AuthorizationEnvelope | undefined {
     const row = this.database
       .prepare(
-        `SELECT id, operation, source_message_id, quoted_text, created_at, expires_at, consumed_at
+        `SELECT id, operation, source_message_id, quoted_text, target_post_id, created_at, expires_at, consumed_at
          FROM authorization_envelopes WHERE id = ?`,
       )
       .get(id) as Record<string, string | null> | undefined;
@@ -412,6 +423,7 @@ export class ApplicationDatabase {
     payloadHash: string;
     accountId: string;
     requestJson: string;
+    targetPostId?: string;
     now?: Date;
   }): XOperation {
     return this.transaction(() => {
@@ -437,6 +449,16 @@ export class ApplicationDatabase {
       if (envelope.operation !== input.operation) {
         throw new Error(
           `Owner authorization permits ${envelope.operation}, not ${input.operation}`,
+        );
+      }
+      if (
+        (input.operation === "edit" ||
+          input.operation === "cancel" ||
+          input.operation === "delete") &&
+        (!envelope.targetPostId || envelope.targetPostId !== input.targetPostId)
+      ) {
+        throw new Error(
+          "The requested X post does not match the target authorized by the owner",
         );
       }
       if (
@@ -562,6 +584,7 @@ function mapAuthorization(
     operation: row.operation as AuthorizationOperation,
     sourceMessageId: row.source_message_id!,
     quotedText: row.quoted_text ?? null,
+    targetPostId: row.target_post_id ?? null,
     createdAt: row.created_at!,
     expiresAt: row.expires_at!,
     consumedAt: row.consumed_at ?? null,

@@ -38,10 +38,9 @@ export class StanAgentRuntime {
     idempotencyKey?: string,
   ): Promise<string> {
     if (!this.flue) throw new Error("Stan agent runtime is not started");
-    const semantic =
-      !idempotencyKey && this.semanticContext
-        ? await this.semanticContext(message.body)
-        : undefined;
+    const semantic = this.semanticContext
+      ? await this.semanticContext(message.body)
+      : undefined;
     const enriched = semantic
       ? {
           ...message,

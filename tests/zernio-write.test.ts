@@ -86,6 +86,7 @@ describe("Zernio public-write boundary", () => {
     const envelope = database.createAuthorization({
       sourceMessageId: "owner-edit",
       operation: "edit",
+      targetPostId: "other-account-post",
     });
     const mutate = vi.fn();
     const service = new ZernioWriteService(database, {
@@ -123,6 +124,7 @@ describe("Zernio public-write boundary", () => {
     database.createAuthorization({
       sourceMessageId: "owner-edit",
       operation: "edit",
+      targetPostId: "z-1",
     });
     const mutate = vi.fn();
     const verifyPostAccount = vi.fn();
@@ -154,6 +156,7 @@ describe("Zernio public-write boundary", () => {
     database.createAuthorization({
       sourceMessageId: "owner-edit",
       operation: "edit",
+      targetPostId: "z-1",
     });
     const mutate = vi.fn(async () => {
       throw new Error("connection reset after edit");
@@ -186,6 +189,36 @@ describe("Zernio public-write boundary", () => {
         )
         .get(first.logicalId),
     ).toEqual({ provider_id: "z-1" });
+    database.close();
+  });
+
+  it("rejects a destructive target other than the one the owner authorized", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-delete",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "delete X post z-1",
+      receivedAt: new Date().toISOString(),
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-delete",
+      operation: "delete",
+      targetPostId: "z-1",
+    });
+    const mutate = vi.fn();
+    const service = new ZernioWriteService(database, {
+      mutate,
+      verifyPostAccount: vi.fn(async () => true),
+    });
+
+    await expect(
+      service.execute(
+        { sourceMessageId: "owner-delete", selectedAccountId: "account-1" },
+        { operation: "delete", providerPostId: "z-2" },
+      ),
+    ).rejects.toThrow(/target authorized by the owner/i);
+    expect(mutate).not.toHaveBeenCalled();
     database.close();
   });
 

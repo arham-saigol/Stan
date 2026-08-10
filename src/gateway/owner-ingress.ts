@@ -4,7 +4,7 @@ import {
   type ApplicationDatabase,
   normalizeJid,
 } from "../storage/application-db.ts";
-import { deriveAuthorizationOperation } from "./owner-authorization.ts";
+import { deriveAuthorization } from "./owner-authorization.ts";
 
 export interface InboundMessage {
   id: string;
@@ -140,12 +140,18 @@ export class OwnerIngress {
     this.processing.add(message.id);
     try {
       if (!this.database.getAuthorizationForSource(message.id)) {
-        const operation = deriveAuthorizationOperation(message.text);
-        if (operation) {
+        const authorization = deriveAuthorization(
+          message.text,
+          message.quotedText,
+        );
+        if (authorization) {
           this.database.createAuthorization({
             sourceMessageId: message.id,
-            operation,
+            operation: authorization.operation,
             now: new Date(message.receivedAt),
+            ...(authorization.targetPostId
+              ? { targetPostId: authorization.targetPostId }
+              : {}),
             ...(message.quotedText === undefined
               ? {}
               : { quotedText: message.quotedText }),

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { deriveAuthorizationOperation } from "../src/gateway/owner-authorization.ts";
+import {
+  deriveAuthorization,
+  deriveAuthorizationOperation,
+} from "../src/gateway/owner-authorization.ts";
 
 describe("owner X authorization classification", () => {
   it("does not authorize negations, discussion, or owner questions", () => {
@@ -35,5 +38,19 @@ describe("owner X authorization classification", () => {
     expect(deriveAuthorizationOperation("Cancel the scheduled post")).toBe(
       "cancel",
     );
+  });
+
+  it("binds destructive authorization to an explicit owner target", () => {
+    expect(deriveAuthorization("Delete X post z-123")).toEqual({
+      operation: "delete",
+      targetPostId: "z-123",
+    });
+    expect(
+      deriveAuthorization(
+        "Delete this X post",
+        "https://x.com/arham/status/1900123456789",
+      ),
+    ).toEqual({ operation: "delete", targetPostId: "1900123456789" });
+    expect(deriveAuthorization("Delete this X post")).toBeUndefined();
   });
 });
