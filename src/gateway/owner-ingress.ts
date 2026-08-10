@@ -7,6 +7,8 @@ import {
 import {
   deriveAuthorization,
   deriveAutomationAuthorization,
+  deriveMemoryAuthorization,
+  deriveHeartbeatSettingsAuthorization,
   deriveWorkspaceAuthorization,
 } from "./owner-authorization.ts";
 
@@ -187,6 +189,25 @@ export class OwnerIngress {
         this.database.createWorkspaceAuthorization(
           message.id,
           workspaceAuthorization.payloadJson,
+          new Date(message.receivedAt),
+        );
+      }
+      const memoryAuthorization = deriveMemoryAuthorization(message.text);
+      if (memoryAuthorization) {
+        this.database.createMemoryAuthorization(
+          message.id,
+          memoryAuthorization.operation,
+          memoryAuthorization.payloadJson,
+          new Date(message.receivedAt),
+        );
+      }
+      const heartbeatAuthorization = deriveHeartbeatSettingsAuthorization(
+        message.text,
+      );
+      if (heartbeatAuthorization) {
+        this.database.createHeartbeatSettingsAuthorization(
+          message.id,
+          heartbeatAuthorization.payloadJson,
           new Date(message.receivedAt),
         );
       }

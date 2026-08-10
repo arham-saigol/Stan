@@ -14,6 +14,7 @@ export type AutomationAuthorizationOperation =
   | "create"
   | "set_enabled"
   | "delete";
+export type MemoryAuthorizationOperation = "remember" | "forget";
 export type XOperationStatus =
   | "draft"
   | "scheduled"
@@ -99,6 +100,19 @@ CREATE TABLE IF NOT EXISTS automation_authorizations (
 CREATE TABLE IF NOT EXISTS workspace_authorizations (
   source_message_id TEXT PRIMARY KEY REFERENCES inbound_messages(provider_message_id),
   operation TEXT NOT NULL CHECK (operation = 'edit'),
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  consumed_at TEXT
+) STRICT;
+CREATE TABLE IF NOT EXISTS memory_authorizations (
+  source_message_id TEXT PRIMARY KEY REFERENCES inbound_messages(provider_message_id),
+  operation TEXT NOT NULL CHECK (operation IN ('remember', 'forget')),
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  consumed_at TEXT
+) STRICT;
+CREATE TABLE IF NOT EXISTS heartbeat_settings_authorizations (
+  source_message_id TEXT PRIMARY KEY REFERENCES inbound_messages(provider_message_id),
   payload_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
   consumed_at TEXT
@@ -707,6 +721,83 @@ export class ApplicationDatabase {
     if (result.changes !== 1) {
       throw new Error(
         "Current owner authorization is required to edit a workspace file",
+      );
+    }
+  }
+
+  createMemoryAuthorization(
+    sourceMessageId: string,
+    operation: MemoryAuthorizationOperation,
+    payloadJson: string,
+    now = new Date(),
+  ): void {
+    this.database
+      .prepare(
+        `INSERT OR IGNORE INTO memory_authorizations(source_message_id, operation, payload_json, created_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(sourceMessageId, operation, payloadJson, now.toISOString());
+  }
+
+  consumeMemoryAuthorization(
+    sourceMessageId: string,
+    operation: MemoryAuthorizationOperation,
+    payloadJson: string,
+  ): void {
+    const now = new Date();
+    const result = this.database
+      .prepare(
+        `UPDATE memory_authorizations SET consumed_at = ?
+         WHERE source_message_id = ? AND operation = ? AND payload_json = ?
+           AND consumed_at IS NULL AND created_at > ?`,
+      )
+      .run(
+        now.toISOString(),
+        sourceMessageId,
+        operation,
+        payloadJson,
+        new Date(now.getTime() - 15 * 60_000).toISOString(),
+      );
+    if (result.changes !== 1) {
+      throw new Error(
+        `Current owner authorization is required to ${operation} memory`,
+      );
+    }
+  }
+
+  createHeartbeatSettingsAuthorization(
+    sourceMessageId: string,
+    payloadJson: string,
+    now = new Date(),
+  ): void {
+    this.database
+      .prepare(
+        `INSERT OR IGNORE INTO heartbeat_settings_authorizations(source_message_id, payload_json, created_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(sourceMessageId, payloadJson, now.toISOString());
+  }
+
+  consumeHeartbeatSettingsAuthorization(
+    sourceMessageId: string,
+    payloadJson: string,
+  ): void {
+    const now = new Date();
+    const result = this.database
+      .prepare(
+        `UPDATE heartbeat_settings_authorizations SET consumed_at = ?
+         WHERE source_message_id = ? AND payload_json = ?
+           AND consumed_at IS NULL AND created_at > ?`,
+      )
+      .run(
+        now.toISOString(),
+        sourceMessageId,
+        payloadJson,
+        new Date(now.getTime() - 15 * 60_000).toISOString(),
+      );
+    if (result.changes !== 1) {
+      throw new Error(
+        "Current owner authorization is required to update heartbeat settings",
       );
     }
   }

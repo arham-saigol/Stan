@@ -3,6 +3,8 @@ import {
   deriveAuthorization,
   deriveAuthorizationOperation,
   deriveAutomationAuthorization,
+  deriveMemoryAuthorization,
+  deriveHeartbeatSettingsAuthorization,
   deriveWorkspaceAuthorization,
 } from "../src/gateway/owner-authorization.ts";
 
@@ -82,6 +84,12 @@ describe("owner X authorization classification", () => {
       authorizedContent: "Exact post text",
     });
     expect(deriveAuthorization("Post this on X")).toBeUndefined();
+    expect(
+      deriveAuthorization(
+        "Schedule this X post for 2026-02-30T09:00:00Z",
+        "Exact post text",
+      ),
+    ).toBeUndefined();
   });
 
   it("requires an explicit automation mutation verb and object", () => {
@@ -119,5 +127,34 @@ describe("owner X authorization classification", () => {
       ),
     ).toBeUndefined();
     expect(deriveWorkspaceAuthorization("Update our goals")).toBeUndefined();
+  });
+
+  it("binds semantic-memory mutations to exact content or document IDs", () => {
+    expect(
+      deriveMemoryAuthorization("remember: prefers simple systems"),
+    ).toEqual({
+      operation: "remember",
+      payloadJson: '{"content":"prefers simple systems"}',
+    });
+    expect(deriveMemoryAuthorization("forget memory document-123")).toEqual({
+      operation: "forget",
+      payloadJson: '{"documentId":"document-123"}',
+    });
+    expect(deriveMemoryAuthorization("What do you remember?")).toBeUndefined();
+  });
+
+  it("binds heartbeat settings to an exact validated patch", () => {
+    expect(
+      deriveHeartbeatSettingsAuthorization(
+        'update heartbeat: {"enabled":true,"intervalMinutes":60}',
+      ),
+    ).toEqual({
+      payloadJson: '{"enabled":true,"intervalMinutes":60}',
+    });
+    expect(
+      deriveHeartbeatSettingsAuthorization(
+        'update heartbeat: {"intervalMinutes":5}',
+      ),
+    ).toBeUndefined();
   });
 });

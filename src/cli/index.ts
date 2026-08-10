@@ -63,7 +63,18 @@ program
 program
   .command("auth")
   .description("authenticate OpenAI Codex and select model/thinking")
-  .action(action(async () => authCommand(root())));
+  .action(
+    action(async () => {
+      const stateRoot = root();
+      const daemonWasRunning = Boolean(await getDaemonStatus(stateRoot));
+      if (daemonWasRunning) await stopService(stateRoot);
+      try {
+        await authCommand(stateRoot);
+      } finally {
+        if (daemonWasRunning) await startService(stateRoot);
+      }
+    }),
+  );
 program
   .command("start")
   .description("idempotently start the daemon")

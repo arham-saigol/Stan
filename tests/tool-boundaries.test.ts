@@ -4,9 +4,12 @@ import { ApplicationDatabase } from "../src/storage/application-db.ts";
 import { heartbeatTools } from "../src/tools/heartbeat.ts";
 import { workspaceTools } from "../src/tools/workspace.ts";
 import { automationTools } from "../src/tools/automations.ts";
+import { memoryTools } from "../src/tools/memory.ts";
+import type { SupermemoryProvider } from "../src/memory/supermemory.ts";
 import { AutomationStore } from "../src/scheduler/automations.ts";
 import { automationMutationPayload } from "../src/gateway/owner-authorization.ts";
 import { workspaceMutationPayload } from "../src/gateway/owner-authorization.ts";
+import { memoryMutationPayload } from "../src/gateway/owner-authorization.ts";
 
 type Run = (context: { data: Record<string, unknown> }) => Promise<unknown>;
 
@@ -128,6 +131,36 @@ describe("trusted tool boundaries", () => {
       output: { name: "explicit reminder" },
     });
     await expect((tool.run as Run)(input)).rejects.toThrow(/authorization/i);
+    database.close();
+  });
+
+  it("consumes exact single-use semantic-memory intent", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-memory",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "remember: simple systems",
+      receivedAt: new Date().toISOString(),
+    });
+    const remember = vi.fn(async () => ({ id: "memory-1", status: "done" }));
+    const tool = memoryTools(
+      { remember } as unknown as SupermemoryProvider,
+      database,
+      { kind: "owner", sourceMessageId: "owner-memory" },
+    ).find((candidate) => candidate.name === "remember")!;
+    const data = { content: "simple systems" };
+
+    database.createMemoryAuthorization(
+      "owner-memory",
+      "remember",
+      memoryMutationPayload("remember", data),
+    );
+    await expect((tool.run as Run)({ data })).resolves.toMatchObject({
+      output: { id: "memory-1" },
+    });
+    await expect((tool.run as Run)({ data })).rejects.toThrow(/authorization/i);
+    expect(remember).toHaveBeenCalledOnce();
     database.close();
   });
 });

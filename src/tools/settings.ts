@@ -1,15 +1,19 @@
 import { defineTool, type ToolDefinition } from "@flue/runtime";
 import * as v from "valibot";
 import type { ConfigStore } from "../config/store.ts";
+import type { ApplicationDatabase } from "../storage/application-db.ts";
+import { heartbeatSettingsMutationPayload } from "../gateway/owner-authorization.ts";
 import type { TrustedDeliveryContext } from "./types.ts";
 
 export function settingsTools(
   store: ConfigStore,
+  database: ApplicationDatabase,
   trusted: TrustedDeliveryContext,
 ): ToolDefinition[] {
   const requireOwner = () => {
     if (trusted.kind !== "owner" || !trusted.sourceMessageId)
       throw new Error("Heartbeat settings require a current owner message");
+    return trusted.sourceMessageId;
   };
   return [
     defineTool({
@@ -23,7 +27,7 @@ export function settingsTools(
     defineTool({
       name: "update_heartbeat_settings",
       description:
-        "Update heartbeat enabled state, active hours, cadence, or catch-up grace from the current owner turn.",
+        "Update heartbeat enabled state, active hours, cadence, or catch-up grace after an exact `update heartbeat: {JSON matching these fields}` owner command.",
       input: v.object({
         enabled: v.optional(v.boolean()),
         startTime: v.optional(
@@ -40,7 +44,10 @@ export function settingsTools(
         ),
       }),
       async run({ data }) {
-        requireOwner();
+        database.consumeHeartbeatSettingsAuthorization(
+          requireOwner(),
+          heartbeatSettingsMutationPayload(data),
+        );
         const updated = await store.update((current) => ({
           ...current,
           heartbeat: { ...current.heartbeat, ...data },

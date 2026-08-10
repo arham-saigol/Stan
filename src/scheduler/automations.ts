@@ -122,16 +122,28 @@ export class AutomationStore {
         : existingNext;
     if (enabled && !next)
       throw new Error("Automation has no future occurrence");
-    this.application.database
-      .prepare(
-        "UPDATE automations SET enabled = ?, next_run_at = ?, updated_at = ? WHERE id = ?",
-      )
-      .run(
-        enabled ? 1 : 0,
-        enabled ? next!.toISOString() : current.nextRunAt,
-        new Date().toISOString(),
-        id,
-      );
+    const timestamp = new Date().toISOString();
+    this.application.transaction(() => {
+      this.application.database
+        .prepare(
+          "UPDATE automations SET enabled = ?, next_run_at = ?, updated_at = ? WHERE id = ?",
+        )
+        .run(
+          enabled ? 1 : 0,
+          enabled ? next!.toISOString() : current.nextRunAt,
+          timestamp,
+          id,
+        );
+      if (!enabled) {
+        this.application.database
+          .prepare(
+            `UPDATE automation_runs SET status = 'failed', lease_until = NULL,
+             error = 'Automation disabled before recovery', updated_at = ?
+             WHERE automation_id = ? AND status = 'unknown'`,
+          )
+          .run(timestamp, id);
+      }
+    });
     return this.get(id)!;
   }
 
@@ -211,7 +223,8 @@ export class AutomationStore {
         .prepare(
           `SELECT r.occurrence_id, r.scheduled_for, r.flue_submission_id, a.*
            FROM automation_runs r JOIN automations a ON a.id = r.automation_id
-           WHERE r.status = 'unknown' AND (r.lease_until IS NULL OR r.lease_until <= ?)
+           WHERE r.status = 'unknown' AND (a.enabled = 1 OR a.schedule_type = 'once')
+             AND (r.lease_until IS NULL OR r.lease_until <= ?)
            ORDER BY r.updated_at LIMIT ?`,
         )
         .all(now.toISOString(), limit) as Record<

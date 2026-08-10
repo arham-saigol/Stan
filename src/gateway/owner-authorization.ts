@@ -1,7 +1,9 @@
 import type {
   AuthorizationOperation,
   AutomationAuthorizationOperation,
+  MemoryAuthorizationOperation,
 } from "../storage/application-db.ts";
+import { Temporal } from "@js-temporal/polyfill";
 
 export interface DerivedAuthorization {
   operation: AuthorizationOperation;
@@ -16,6 +18,15 @@ export interface DerivedAutomationAuthorization {
 }
 
 export interface DerivedWorkspaceAuthorization {
+  payloadJson: string;
+}
+
+export interface DerivedMemoryAuthorization {
+  operation: MemoryAuthorizationOperation;
+  payloadJson: string;
+}
+
+export interface DerivedHeartbeatSettingsAuthorization {
   payloadJson: string;
 }
 
@@ -238,6 +249,123 @@ export function workspaceMutationPayload(
   });
 }
 
+export function deriveMemoryAuthorization(
+  text: string,
+): DerivedMemoryAuthorization | undefined {
+  const normalized = text.trim().replace(prefixes, "");
+  const remember = /^remember\s*:\s*(.+)$/is.exec(normalized);
+  if (remember) {
+    try {
+      return {
+        operation: "remember",
+        payloadJson: memoryMutationPayload("remember", {
+          content: remember[1]!.trim(),
+        }),
+      };
+    } catch {
+      return undefined;
+    }
+  }
+  const forget = /^forget\s+memory\s+([^\s]{1,200})$/i.exec(normalized);
+  return forget
+    ? {
+        operation: "forget",
+        payloadJson: memoryMutationPayload("forget", {
+          documentId: forget[1]!,
+        }),
+      }
+    : undefined;
+}
+
+export function memoryMutationPayload(
+  operation: MemoryAuthorizationOperation,
+  input: Record<string, unknown>,
+): string {
+  if (operation === "remember") {
+    if (
+      typeof input.content !== "string" ||
+      input.content.length < 1 ||
+      input.content.length > 20_000
+    )
+      throw new Error("Memory confirmation content is invalid");
+    return JSON.stringify({ content: input.content });
+  }
+  if (
+    typeof input.documentId !== "string" ||
+    input.documentId.length < 1 ||
+    input.documentId.length > 200
+  )
+    throw new Error("Memory confirmation target is invalid");
+  return JSON.stringify({ documentId: input.documentId });
+}
+
+export function deriveHeartbeatSettingsAuthorization(
+  text: string,
+): DerivedHeartbeatSettingsAuthorization | undefined {
+  const normalized = text.trim().replace(prefixes, "");
+  const match = /^update\s+heartbeat\s*:\s*(\{.*\})$/is.exec(normalized);
+  if (!match) return undefined;
+  try {
+    return {
+      payloadJson: heartbeatSettingsMutationPayload(
+        JSON.parse(match[1]!) as Record<string, unknown>,
+      ),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function heartbeatSettingsMutationPayload(
+  input: Record<string, unknown>,
+): string {
+  const keys = [
+    "enabled",
+    "startTime",
+    "endTime",
+    "intervalMinutes",
+    "morningCatchupMinutes",
+  ] as const;
+  if (!keys.some((key) => input[key] !== undefined))
+    throw new Error("Heartbeat settings confirmation is empty");
+  if (
+    (input.enabled !== undefined && typeof input.enabled !== "boolean") ||
+    !validOptionalTime(input.startTime) ||
+    !validOptionalTime(input.endTime) ||
+    !validOptionalInteger(input.intervalMinutes, 30, 1440) ||
+    !validOptionalInteger(input.morningCatchupMinutes, 0, 720)
+  )
+    throw new Error("Heartbeat settings confirmation is invalid");
+  return JSON.stringify(
+    Object.fromEntries(
+      keys.flatMap((key) =>
+        input[key] === undefined ? [] : [[key, input[key]]],
+      ),
+    ),
+  );
+}
+
+function validOptionalTime(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (typeof value === "string" && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value))
+  );
+}
+
+function validOptionalInteger(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+): boolean {
+  return (
+    value === undefined ||
+    (typeof value === "number" &&
+      Number.isInteger(value) &&
+      value >= minimum &&
+      value <= maximum)
+  );
+}
+
 function contentOperation(operation: AuthorizationOperation): boolean {
   return (
     operation === "publish" ||
@@ -253,6 +381,11 @@ function extractScheduledInstant(text: string): string | undefined {
       text,
     );
   if (!match || !Number.isFinite(Date.parse(match[1]!))) return undefined;
+  try {
+    Temporal.PlainDate.from(match[1]!.slice(0, 10));
+  } catch {
+    return undefined;
+  }
   return new Date(match[1]!).toISOString();
 }
 

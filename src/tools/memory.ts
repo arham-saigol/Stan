@@ -2,10 +2,13 @@ import { createHash } from "node:crypto";
 import { defineTool, type ToolDefinition } from "@flue/runtime";
 import * as v from "valibot";
 import type { SupermemoryProvider } from "../memory/supermemory.ts";
+import type { ApplicationDatabase } from "../storage/application-db.ts";
+import { memoryMutationPayload } from "../gateway/owner-authorization.ts";
 import type { TrustedDeliveryContext } from "./types.ts";
 
 export function memoryTools(
   memory: SupermemoryProvider | undefined,
+  database: ApplicationDatabase,
   trusted: TrustedDeliveryContext,
 ): ToolDefinition[] {
   const client = () => {
@@ -15,22 +18,30 @@ export function memoryTools(
       );
     return memory;
   };
-  const requireOwner = () => {
+  const requireOwner = (
+    operation: "remember" | "forget",
+    input: Record<string, unknown>,
+  ) => {
     if (trusted.kind !== "owner" || !trusted.sourceMessageId)
       throw new Error(
         "This memory change requires a current owner-directed turn",
       );
+    database.consumeMemoryAuthorization(
+      trusted.sourceMessageId,
+      operation,
+      memoryMutationPayload(operation, input),
+    );
   };
   return [
     defineTool({
       name: "remember",
       description:
-        "Explicitly remember owner-provided context in Supermemory. Use for “remember this” requests, not exact operational facts.",
+        "Remember exact owner-provided context after an exact `remember: <content>` command. Do not use for operational facts.",
       input: v.object({
         content: v.pipe(v.string(), v.minLength(1), v.maxLength(20_000)),
       }),
       async run({ data }) {
-        requireOwner();
+        requireOwner("remember", data);
         const customId = `stan-explicit-${createHash("sha256")
           .update(`${trusted.sourceMessageId!}\0${data.content}`)
           .digest("hex")}`;
@@ -59,10 +70,10 @@ export function memoryTools(
     defineTool({
       name: "forget_memory",
       description:
-        "Permanently delete one Supermemory document. Requires a current owner-directed turn.",
+        "Permanently delete one Supermemory document after an exact `forget memory <documentId>` owner command.",
       input: v.object({ documentId: v.string() }),
       async run({ data }) {
-        requireOwner();
+        requireOwner("forget", data);
         await client().forgetDocument(data.documentId);
         return { output: { forgotten: true } };
       },

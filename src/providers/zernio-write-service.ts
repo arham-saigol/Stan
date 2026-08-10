@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { Temporal } from "@js-temporal/polyfill";
 import { redactForLogging } from "../logging.ts";
 import type {
   ApplicationDatabase,
@@ -71,6 +72,10 @@ export class ZernioWriteService {
           ? request.replyToPostId
           : undefined;
     const content = getContent(request);
+    const scheduledFor =
+      request.operation === "schedule"
+        ? normalizeScheduledFor(request.scheduledFor)
+        : undefined;
     const payloadHash = hashPayload({
       accountId: context.selectedAccountId,
       request,
@@ -85,9 +90,7 @@ export class ZernioWriteService {
         requestJson: stableJson(request),
         ...(targetPostId ? { targetPostId } : {}),
         ...(content ? { content } : {}),
-        ...(request.operation === "schedule"
-          ? { scheduledFor: new Date(request.scheduledFor).toISOString() }
-          : {}),
+        ...(scheduledFor ? { scheduledFor } : {}),
       });
     const existing = this.database.getXOperationByEnvelope(envelope.id);
     if (existing) {
@@ -138,8 +141,7 @@ export class ZernioWriteService {
     }
     if (
       request.operation === "schedule" &&
-      (!Number.isFinite(Date.parse(request.scheduledFor)) ||
-        Date.parse(request.scheduledFor) <= Date.now() + 60_000)
+      Date.parse(scheduledFor!) <= Date.now() + 60_000
     ) {
       throw new Error(
         "A scheduled X post must be at least one minute in the future",
@@ -240,6 +242,15 @@ export class ZernioWriteService {
       return updated;
     }
   }
+}
+
+function normalizeScheduledFor(value: string): string {
+  try {
+    Temporal.Instant.from(value);
+  } catch {
+    throw new Error("A scheduled X post must use a valid ISO timestamp");
+  }
+  return new Date(value).toISOString();
 }
 
 export function verifiedStatus(

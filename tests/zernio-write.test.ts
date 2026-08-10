@@ -75,6 +75,20 @@ describe("Zernio public-write boundary", () => {
         scheduledFor: "2099-08-14T05:00:00Z",
       }),
     ).rejects.toThrow(/exact time authorized/i);
+    await expect(
+      service.execute(context, {
+        operation: "schedule",
+        content: "hello",
+        scheduledFor: "not-a-time",
+      }),
+    ).rejects.toThrow(/valid ISO timestamp/i);
+    await expect(
+      service.execute(context, {
+        operation: "schedule",
+        content: "hello",
+        scheduledFor: "2026-02-30T09:00:00Z",
+      }),
+    ).rejects.toThrow(/valid ISO timestamp/i);
     expect(mutate).not.toHaveBeenCalled();
     database.close();
   });

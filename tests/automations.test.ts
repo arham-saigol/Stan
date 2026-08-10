@@ -82,6 +82,26 @@ describe("declarative automations", () => {
     database.close();
   });
 
+  it("does not recover an unknown run after its automation is disabled", () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const store = new AutomationStore(database);
+    const automation = store.create({
+      name: "paused recovery",
+      schedule: { type: "once", at: "2026-08-13T04:00:00Z" },
+      instruction: "Check once",
+      deliveryMode: "silent",
+      creatorMessageId: "owner-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    store.claimDue(new Date("2026-08-13T04:00:00Z"));
+    store.claimDue(new Date("2026-08-13T04:11:00Z"));
+    store.setEnabled(automation.id, false);
+
+    expect(store.recoverableRuns(new Date("2026-08-13T04:12:00Z"))).toEqual([]);
+    database.close();
+  });
+
   it("claims each due occurrence exactly once", () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
