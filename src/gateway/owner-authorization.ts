@@ -15,6 +15,10 @@ export interface DerivedAutomationAuthorization {
   payloadJson: string;
 }
 
+export interface DerivedWorkspaceAuthorization {
+  payloadJson: string;
+}
+
 const prefixes =
   /^(?:(?:(?:yes|okay|ok|please|stan)[,.!]?|(?:can|could|would)\s+you|go\s+ahead(?:\s+and)?)\s+)*/i;
 const command =
@@ -186,6 +190,52 @@ export function automationMutationPayload(
     return JSON.stringify({ id: input.id, enabled: input.enabled });
   }
   return JSON.stringify({ id: input.id });
+}
+
+export function deriveWorkspaceAuthorization(
+  text: string,
+): DerivedWorkspaceAuthorization | undefined {
+  const normalized = text.trim().replace(prefixes, "");
+  const match = /^edit\s+workspace\s*:\s*(\{.*\})$/is.exec(normalized);
+  if (!match) return undefined;
+  try {
+    return {
+      payloadJson: workspaceMutationPayload(
+        JSON.parse(match[1]!) as Record<string, unknown>,
+      ),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function workspaceMutationPayload(
+  input: Record<string, unknown>,
+): string {
+  const files = new Set([
+    "goals",
+    "strategy",
+    "playbook",
+    "heartbeats",
+    "watchlist",
+    "voice_profile",
+    "voice_examples",
+  ]);
+  if (
+    typeof input.file !== "string" ||
+    !files.has(input.file) ||
+    (input.operation !== "replace" && input.operation !== "append") ||
+    typeof input.text !== "string" ||
+    (input.operation === "replace" && typeof input.oldText !== "string")
+  ) {
+    throw new Error("Workspace confirmation payload is invalid");
+  }
+  return JSON.stringify({
+    file: input.file,
+    operation: input.operation,
+    ...(input.operation === "replace" ? { oldText: input.oldText } : {}),
+    text: input.text,
+  });
 }
 
 function contentOperation(operation: AuthorizationOperation): boolean {

@@ -6,6 +6,7 @@ import { workspaceTools } from "../src/tools/workspace.ts";
 import { automationTools } from "../src/tools/automations.ts";
 import { AutomationStore } from "../src/scheduler/automations.ts";
 import { automationMutationPayload } from "../src/gateway/owner-authorization.ts";
+import { workspaceMutationPayload } from "../src/gateway/owner-authorization.ts";
 
 type Run = (context: { data: Record<string, unknown> }) => Promise<unknown>;
 
@@ -40,12 +41,14 @@ describe("trusted tool boundaries", () => {
   });
 
   it("rejects workspace persistence outside a current owner turn", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
     const edit = vi.fn();
     const workspace = {
       read: vi.fn(),
       edit,
     } as unknown as WorkspaceStore;
-    const tool = workspaceTools(workspace, {
+    const tool = workspaceTools(workspace, database, {
       kind: "heartbeat",
       occurrenceId: "heartbeat-1",
     }).find((candidate) => candidate.name === "edit_workspace_file")!;
@@ -56,6 +59,39 @@ describe("trusted tool boundaries", () => {
       }),
     ).rejects.toThrow(/owner message/i);
     expect(edit).not.toHaveBeenCalled();
+    database.close();
+  });
+
+  it("binds a workspace edit to the exact owner-confirmed payload", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-workspace",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "edit workspace",
+      receivedAt: new Date().toISOString(),
+    });
+    const edit = vi.fn(async () => "updated");
+    const workspace = {
+      read: vi.fn(),
+      edit,
+    } as unknown as WorkspaceStore;
+    const tool = workspaceTools(workspace, database, {
+      kind: "owner",
+      sourceMessageId: "owner-workspace",
+    }).find((candidate) => candidate.name === "edit_workspace_file")!;
+    const data = { file: "goals", operation: "append", text: "Ship Stan" };
+
+    database.createWorkspaceAuthorization(
+      "owner-workspace",
+      workspaceMutationPayload(data),
+    );
+    await expect((tool.run as Run)({ data })).resolves.toMatchObject({
+      output: { file: "goals", content: "updated" },
+    });
+    await expect((tool.run as Run)({ data })).rejects.toThrow(/authorization/i);
+    expect(edit).toHaveBeenCalledOnce();
+    database.close();
   });
 
   it("consumes explicit operation-specific automation intent", async () => {

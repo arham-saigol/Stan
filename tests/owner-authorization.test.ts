@@ -3,6 +3,7 @@ import {
   deriveAuthorization,
   deriveAuthorizationOperation,
   deriveAutomationAuthorization,
+  deriveWorkspaceAuthorization,
 } from "../src/gateway/owner-authorization.ts";
 
 describe("owner X authorization classification", () => {
@@ -102,5 +103,21 @@ describe("owner X authorization classification", () => {
     expect(
       deriveAutomationAuthorization("Research our automation rate"),
     ).toBeUndefined();
+  });
+
+  it("binds workspace authorization to one exact edit payload", () => {
+    expect(
+      deriveWorkspaceAuthorization(
+        'edit workspace: {"file":"goals","operation":"append","text":"Ship Stan"}',
+      ),
+    ).toEqual({
+      payloadJson: '{"file":"goals","operation":"append","text":"Ship Stan"}',
+    });
+    expect(
+      deriveWorkspaceAuthorization(
+        'edit workspace: {"file":"secrets","operation":"append","text":"oops"}',
+      ),
+    ).toBeUndefined();
+    expect(deriveWorkspaceAuthorization("Update our goals")).toBeUndefined();
   });
 });

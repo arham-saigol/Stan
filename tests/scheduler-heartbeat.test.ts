@@ -175,4 +175,47 @@ describe("heartbeat execution", () => {
     ).toEqual({ status: "failed", attempts: 3, next_retry_at: null });
     database.close();
   });
+
+  it("reclaims a failed regular heartbeat after its scheduled minute", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-regular-recovery-"));
+    const config = new ConfigStore(root);
+    await config.write(createDefaultConfig({ ownerPhone: "+923001234567" }));
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const deliver = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("model unavailable"))
+      .mockImplementationOnce(
+        async (
+          _id: string,
+          message: { attributes?: Record<string, string> },
+        ) => {
+          database.database
+            .prepare(
+              "UPDATE heartbeat_occurrences SET status = 'silent', notify = 0 WHERE occurrence_id = ?",
+            )
+            .run(message.attributes!.occurrenceId!);
+          return "";
+        },
+      );
+    const scheduler = new Scheduler(
+      database,
+      config,
+      { isBusy: () => false, deliver } as unknown as StanAgentRuntime,
+      { sendOwner: vi.fn() } as unknown as DeliveryService,
+      new AutomationStore(database),
+      pino({ level: "silent" }),
+    );
+
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T07:00:00Z"));
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T07:01:00Z"));
+
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(
+      database.database
+        .prepare("SELECT status, attempts FROM heartbeat_occurrences")
+        .get(),
+    ).toEqual({ status: "silent", attempts: 1 });
+    database.close();
+  });
 });

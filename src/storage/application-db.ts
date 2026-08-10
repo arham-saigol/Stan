@@ -96,6 +96,13 @@ CREATE TABLE IF NOT EXISTS automation_authorizations (
   created_at TEXT NOT NULL,
   consumed_at TEXT
 ) STRICT;
+CREATE TABLE IF NOT EXISTS workspace_authorizations (
+  source_message_id TEXT PRIMARY KEY REFERENCES inbound_messages(provider_message_id),
+  operation TEXT NOT NULL CHECK (operation = 'edit'),
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  consumed_at TEXT
+) STRICT;
 CREATE TABLE IF NOT EXISTS daily_sessions (
   local_date TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL UNIQUE,
@@ -663,6 +670,43 @@ export class ApplicationDatabase {
     if (result.changes !== 1) {
       throw new Error(
         `Current owner authorization is required to ${operation.replace("_", " ")} an automation`,
+      );
+    }
+  }
+
+  createWorkspaceAuthorization(
+    sourceMessageId: string,
+    payloadJson: string,
+    now = new Date(),
+  ): void {
+    this.database
+      .prepare(
+        `INSERT OR IGNORE INTO workspace_authorizations(source_message_id, operation, payload_json, created_at)
+         VALUES (?, 'edit', ?, ?)`,
+      )
+      .run(sourceMessageId, payloadJson, now.toISOString());
+  }
+
+  consumeWorkspaceAuthorization(
+    sourceMessageId: string,
+    payloadJson: string,
+  ): void {
+    const now = new Date();
+    const result = this.database
+      .prepare(
+        `UPDATE workspace_authorizations SET consumed_at = ?
+         WHERE source_message_id = ? AND operation = 'edit' AND payload_json = ?
+           AND consumed_at IS NULL AND created_at > ?`,
+      )
+      .run(
+        now.toISOString(),
+        sourceMessageId,
+        payloadJson,
+        new Date(now.getTime() - 15 * 60_000).toISOString(),
+      );
+    if (result.changes !== 1) {
+      throw new Error(
+        "Current owner authorization is required to edit a workspace file",
       );
     }
   }

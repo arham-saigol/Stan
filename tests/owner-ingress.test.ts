@@ -261,4 +261,29 @@ describe("owner-only ingress", () => {
       quotedText: "Option 2",
     });
   });
+
+  it("reopens a closed transcript when a delayed provider message is admitted", async () => {
+    const { ingress, database } = await harness();
+    database.database
+      .prepare(
+        `INSERT INTO daily_sessions(local_date, conversation_id, state, created_at, closed_at, transcript_complete)
+         VALUES ('2026-08-12', 'stan-owner-2026-08-12', 'closed', ?, ?, 1)`,
+      )
+      .run("2026-08-12T00:00:00.000Z", "2026-08-13T00:01:00.000Z");
+
+    await ingress.handle(
+      message({
+        id: "delayed-owner-message",
+        receivedAt: "2026-08-12T10:00:00.000Z",
+      }),
+    );
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT state, closed_at, transcript_complete FROM daily_sessions WHERE local_date = '2026-08-12'",
+        )
+        .get(),
+    ).toEqual({ state: "active", closed_at: null, transcript_complete: 0 });
+  });
 });

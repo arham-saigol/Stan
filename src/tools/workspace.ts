@@ -1,6 +1,8 @@
 import { defineTool, type ToolDefinition } from "@flue/runtime";
 import * as v from "valibot";
 import type { WorkspaceStore } from "../workspace/store.ts";
+import type { ApplicationDatabase } from "../storage/application-db.ts";
+import { workspaceMutationPayload } from "../gateway/owner-authorization.ts";
 import type { TrustedDeliveryContext } from "./types.ts";
 
 const fileSchema = v.picklist([
@@ -15,6 +17,7 @@ const fileSchema = v.picklist([
 
 export function workspaceTools(
   workspace: WorkspaceStore,
+  database: ApplicationDatabase,
   trusted: TrustedDeliveryContext,
 ): ToolDefinition[] {
   return [
@@ -32,7 +35,7 @@ export function workspaceTools(
     defineTool({
       name: "edit_workspace_file",
       description:
-        "Atomically replace exact text or append bounded text in one allowlisted operating document. Creates a repairable backup.",
+        "Atomically replace exact text or append bounded text after the owner sends `edit workspace: {exact JSON matching these fields}`. Creates a repairable backup.",
       input: v.object({
         file: fileSchema,
         operation: v.picklist(["replace", "append"]),
@@ -47,6 +50,10 @@ export function workspaceTools(
         const source = trusted.sourceMessageId;
         if (data.operation === "replace" && data.oldText === undefined)
           throw new Error("A replace edit requires oldText");
+        database.consumeWorkspaceAuthorization(
+          trusted.sourceMessageId,
+          workspaceMutationPayload(data),
+        );
         const edit =
           data.operation === "replace"
             ? {

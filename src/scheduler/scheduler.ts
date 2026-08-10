@@ -87,9 +87,34 @@ export class Scheduler {
           .all() as { occurrence_id: string }[]
       ).map((row) => row.occurrence_id),
     );
-    const occurrence = dueHeartbeat(now, config.heartbeat, {
-      completedOccurrenceIds: completed,
-    });
+    const failedOccurrence = this.database.database
+      .prepare(
+        `SELECT occurrence_id, local_date, scheduled_for, kind
+         FROM heartbeat_occurrences
+         WHERE status = 'failed' AND notify IS NOT 1 AND attempts < 3
+           AND next_retry_at IS NOT NULL AND next_retry_at <= ?
+         ORDER BY next_retry_at LIMIT 1`,
+      )
+      .get(now.toString()) as
+      | {
+          occurrence_id: string;
+          local_date: string;
+          scheduled_for: string;
+          kind: "morning" | "regular";
+        }
+      | undefined;
+    const occurrence = failedOccurrence
+      ? {
+          id: failedOccurrence.occurrence_id,
+          anchorDate: failedOccurrence.local_date,
+          localDate: failedOccurrence.local_date,
+          localTime: failedOccurrence.occurrence_id.split(":").at(-1)!,
+          scheduledFor: failedOccurrence.scheduled_for,
+          kind: failedOccurrence.kind,
+        }
+      : dueHeartbeat(now, config.heartbeat, {
+          completedOccurrenceIds: completed,
+        });
     if (!occurrence) return;
     const timestamp = now.toString();
     const lastOwner = this.database.database
@@ -127,7 +152,6 @@ export class Scheduler {
       );
     if (status !== "leased") return;
     if (inserted.changes === 0) {
-      if (occurrence.kind !== "morning") return;
       const reclaimed = this.database.database
         .prepare(
           `UPDATE heartbeat_occurrences SET status = 'leased', lease_until = ?, updated_at = ?

@@ -7,6 +7,7 @@ import {
 import {
   deriveAuthorization,
   deriveAutomationAuthorization,
+  deriveWorkspaceAuthorization,
 } from "./owner-authorization.ts";
 
 export interface InboundMessage {
@@ -181,8 +182,22 @@ export class OwnerIngress {
           new Date(message.receivedAt),
         );
       }
+      const workspaceAuthorization = deriveWorkspaceAuthorization(message.text);
+      if (workspaceAuthorization) {
+        this.database.createWorkspaceAuthorization(
+          message.id,
+          workspaceAuthorization.payloadJson,
+          new Date(message.receivedAt),
+        );
+      }
       const sessionId =
         persistedSessionId ?? dailySessionId(message.receivedAt);
+      this.database.database
+        .prepare(
+          `UPDATE daily_sessions SET state = 'active', closed_at = NULL, transcript_complete = 0
+           WHERE conversation_id = ? AND state = 'closed'`,
+        )
+        .run(sessionId);
       this.database.setInboundState(message.id, "dispatched", { sessionId });
       const submissionId =
         persistedSubmissionId ??
