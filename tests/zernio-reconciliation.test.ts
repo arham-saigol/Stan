@@ -137,6 +137,66 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.close();
   });
 
+  it("retries an exhausted-outcome notification without another provider mutation", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-1",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "post it",
+      receivedAt: "2026-08-13T00:00:00Z",
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-1",
+      operation: "publish",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const provider: ZernioMutationProvider = {
+      mutate: vi.fn(async () => {
+        throw new Error("connection reset");
+      }),
+    };
+    const operation = await new ZernioWriteService(database, provider).execute(
+      { sourceMessageId: "owner-1", selectedAccountId: "account-1" },
+      { operation: "publish", content: "hello" },
+    );
+    const sendOwner = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("WhatsApp disconnected"))
+      .mockResolvedValueOnce({ messageId: "out-1" });
+    const delivery = { sendOwner } as unknown as DeliveryService;
+
+    await reconcilePendingXOperations(
+      database,
+      provider,
+      delivery,
+      new Date("2026-08-13T00:02:00Z"),
+    );
+    await expect(
+      reconcilePendingXOperations(
+        database,
+        provider,
+        delivery,
+        new Date("2026-08-13T00:05:00Z"),
+      ),
+    ).rejects.toThrow("WhatsApp disconnected");
+    expect(database.getXOperation(operation.logicalId)!.nextRetryAt).toBe(
+      "2026-08-13T00:05:00.000Z",
+    );
+
+    await reconcilePendingXOperations(
+      database,
+      provider,
+      delivery,
+      new Date("2026-08-13T00:06:00Z"),
+    );
+
+    expect(provider.mutate).toHaveBeenCalledTimes(3);
+    expect(sendOwner).toHaveBeenCalledTimes(2);
+    expect(database.getXOperation(operation.logicalId)!.nextRetryAt).toBeNull();
+    database.close();
+  });
+
   it("retries a verified schedule notification without repeating the provider mutation", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

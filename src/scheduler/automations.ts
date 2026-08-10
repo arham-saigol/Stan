@@ -22,6 +22,7 @@ export interface ClaimedAutomationRun {
   occurrenceId: string;
   automation: Automation;
   scheduledFor: string;
+  submissionId?: string;
 }
 
 export interface PendingAutomationNotification {
@@ -187,6 +188,39 @@ export class AutomationStore {
       if (accepted) claimed.push({ occurrenceId, automation, scheduledFor });
     }
     return claimed;
+  }
+
+  recoverableRuns(limit = 10): ClaimedAutomationRun[] {
+    return (
+      this.application.database
+        .prepare(
+          `SELECT r.occurrence_id, r.scheduled_for, r.flue_submission_id, a.*
+           FROM automation_runs r JOIN automations a ON a.id = r.automation_id
+           WHERE r.status = 'unknown' ORDER BY r.updated_at LIMIT ?`,
+        )
+        .all(limit) as Record<string, string | number | null>[]
+    ).map((row) => ({
+      occurrenceId: String(row.occurrence_id),
+      automation: mapAutomation(row),
+      scheduledFor: String(row.scheduled_for),
+      ...(row.flue_submission_id
+        ? { submissionId: String(row.flue_submission_id) }
+        : {}),
+    }));
+  }
+
+  setSubmission(occurrenceId: string, submissionId: string): void {
+    this.application.database
+      .prepare(
+        `UPDATE automation_runs SET status = 'running', flue_submission_id = ?,
+         lease_until = ?, updated_at = ? WHERE occurrence_id = ?`,
+      )
+      .run(
+        submissionId,
+        new Date(Date.now() + 10 * 60_000).toISOString(),
+        new Date().toISOString(),
+        occurrenceId,
+      );
   }
 
   finishRun(

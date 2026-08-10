@@ -119,7 +119,8 @@ describe("declarative automations", () => {
       creatorMessageId: "owner-1",
       now: new Date("2026-08-13T00:00:00Z"),
     });
-    const deliver = vi.fn(async () => "the finished report");
+    const dispatch = vi.fn(async () => "submission-1");
+    const read = vi.fn(async () => "the finished report");
     const sendOwner = vi
       .fn()
       .mockRejectedValueOnce(new Error("WhatsApp offline"))
@@ -127,7 +128,7 @@ describe("declarative automations", () => {
     const scheduler = new Scheduler(
       database,
       config,
-      { isBusy: () => false, deliver } as unknown as StanAgentRuntime,
+      { isBusy: () => false, dispatch, read } as unknown as StanAgentRuntime,
       { sendOwner } as unknown as DeliveryService,
       automations,
       pino({ level: "silent" }),
@@ -149,8 +150,66 @@ describe("declarative automations", () => {
         .prepare("SELECT status, result FROM automation_runs")
         .get(),
     ).toEqual({ status: "completed", result: "the finished report" });
-    expect(deliver).toHaveBeenCalledOnce();
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledOnce();
     expect(sendOwner).toHaveBeenCalledTimes(2);
+    database.close();
+  });
+
+  it("recovers an expired run through its idempotent Flue submission", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-automation-recovery-"));
+    const config = new ConfigStore(root);
+    const initial = createDefaultConfig({ ownerPhone: "+923001234567" });
+    await config.write({
+      ...initial,
+      heartbeat: { ...initial.heartbeat, enabled: false },
+    });
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const automations = new AutomationStore(database);
+    automations.create({
+      name: "recoverable report",
+      schedule: { type: "once", at: "2026-08-13T04:00:00Z" },
+      instruction: "Prepare the report",
+      deliveryMode: "silent",
+      creatorMessageId: "owner-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const [run] = automations.claimDue(new Date("2026-08-13T04:00:00Z"));
+    automations.claimDue(new Date("2026-08-13T04:11:00Z"));
+    const dispatch = vi.fn(async () => "submission-recovered");
+    const read = vi.fn(async () => "recovered report");
+    const scheduler = new Scheduler(
+      database,
+      config,
+      { isBusy: () => false, dispatch, read } as unknown as StanAgentRuntime,
+      { sendOwner: vi.fn() } as unknown as DeliveryService,
+      automations,
+      pino({ level: "silent" }),
+    );
+
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T04:12:00Z"));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "stan-owner-2026-08-13",
+      expect.any(Object),
+      run!.occurrenceId,
+    );
+    expect(read).toHaveBeenCalledWith(
+      "stan-owner-2026-08-13",
+      "submission-recovered",
+    );
+    expect(
+      database.database
+        .prepare(
+          "SELECT status, flue_submission_id, result FROM automation_runs WHERE occurrence_id = ?",
+        )
+        .get(run!.occurrenceId),
+    ).toEqual({
+      status: "completed",
+      flue_submission_id: "submission-recovered",
+      result: "recovered report",
+    });
     database.close();
   });
 });

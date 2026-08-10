@@ -247,21 +247,30 @@ export class Scheduler {
         });
       }
     }
-    for (const run of this.automations.claimDue(
-      new Date(now.epochMilliseconds),
-    )) {
+    const claimed = this.automations.claimDue(new Date(now.epochMilliseconds));
+    const runs = [...this.automations.recoverableRuns(), ...claimed];
+    for (const run of runs) {
       let reply: string;
       try {
-        reply = await this.agent.deliver(dailySessionId(now), {
-          kind: "signal",
-          type: "automation",
-          body: run.automation.instruction,
-          attributes: {
-            occurrenceId: run.occurrenceId,
-            automationId: run.automation.id,
-            scheduledFor: run.scheduledFor,
-          },
-        });
+        const sessionId = dailySessionId(run.scheduledFor);
+        const submissionId =
+          run.submissionId ??
+          (await this.agent.dispatch(
+            sessionId,
+            {
+              kind: "signal",
+              type: "automation",
+              body: run.automation.instruction,
+              attributes: {
+                occurrenceId: run.occurrenceId,
+                automationId: run.automation.id,
+                scheduledFor: run.scheduledFor,
+              },
+            },
+            run.occurrenceId,
+          ));
+        this.automations.setSubmission(run.occurrenceId, submissionId);
+        reply = await this.agent.read(sessionId, submissionId);
       } catch (error) {
         this.automations.finishRun(run.occurrenceId, {
           status: "failed",

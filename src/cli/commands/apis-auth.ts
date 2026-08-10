@@ -7,6 +7,7 @@ import {
 import { SupermemoryProvider } from "../../memory/supermemory.ts";
 import { ZernioProvider } from "../../providers/zernio.ts";
 import { XQuikProvider } from "../../providers/xquik.ts";
+import { getDaemonStatus, startService, stopService } from "./service.ts";
 
 const prompts: [ApiCredentialName, string][] = [
   ["xquikApiKey", "XQuik API key"],
@@ -16,6 +17,7 @@ const prompts: [ApiCredentialName, string][] = [
 ];
 
 export async function apisAuthCommand(root: string): Promise<void> {
+  const daemonWasRunning = Boolean(await getDaemonStatus(root));
   const store = new CredentialStore(root);
   console.log("Existing credentials:", store.masked());
   const updates: Partial<Record<ApiCredentialName, string | undefined>> = {};
@@ -39,4 +41,9 @@ export async function apisAuthCommand(root: string): Promise<void> {
   }
   await store.update(updates);
   console.log("API credentials validated where possible and saved.");
+  if (daemonWasRunning && Object.keys(updates).length > 0) {
+    await stopService(root);
+    await startService(root);
+    console.log("Stan restarted with the updated provider credentials.");
+  }
 }

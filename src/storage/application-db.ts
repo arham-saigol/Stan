@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS automation_runs (
   scheduled_for TEXT NOT NULL,
   status TEXT NOT NULL,
   lease_until TEXT,
+  flue_submission_id TEXT,
   result TEXT,
   error TEXT,
   created_at TEXT NOT NULL,
@@ -230,6 +231,12 @@ export class ApplicationDatabase {
         "scheduled_publications",
         "poll_count",
         "INTEGER NOT NULL DEFAULT 0",
+      );
+      addColumnIfMissing(
+        this.database,
+        "automation_runs",
+        "flue_submission_id",
+        "TEXT",
       );
     });
   }

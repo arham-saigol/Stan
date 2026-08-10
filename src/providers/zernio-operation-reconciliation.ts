@@ -32,6 +32,10 @@ export async function reconcilePendingXOperations(
       await deliverTerminalResult(database, delivery, operation);
       continue;
     }
+    if (operation.retryCount >= 3) {
+      await deliverUnknownResult(database, delivery, operation);
+      continue;
+    }
     let request: ZernioMutationRequest;
     let result: ProviderMutationResult;
     try {
@@ -48,10 +52,7 @@ export async function reconcilePendingXOperations(
         now,
       );
       if (!updated.nextRetryAt) {
-        await delivery.sendOwner(
-          `I could not verify the ${updated.operation} request after bounded retries. Its outcome is still unknown; check Zernio/X before trying it again.`,
-          `x-operation:${updated.logicalId}:unknown`,
-        );
+        await queueAndDeliverUnknownResult(database, delivery, updated, now);
       }
       continue;
     }
@@ -84,16 +85,41 @@ export async function reconcilePendingXOperations(
         now,
       );
       if (!updated.nextRetryAt) {
-        await delivery.sendOwner(
-          `I could not verify the ${updated.operation} request after bounded retries. Its outcome is still unknown; check Zernio/X before trying it again.`,
-          `x-operation:${updated.logicalId}:unknown`,
-        );
+        await queueAndDeliverUnknownResult(database, delivery, updated, now);
       }
       continue;
     }
     await deliverTerminalResult(database, delivery, updated);
   }
   return rows.length;
+}
+
+async function queueAndDeliverUnknownResult(
+  database: ApplicationDatabase,
+  delivery: DeliveryService,
+  operation: XOperation,
+  now: Date,
+): Promise<void> {
+  database.database
+    .prepare("UPDATE x_operations SET next_retry_at = ? WHERE logical_id = ?")
+    .run(now.toISOString(), operation.logicalId);
+  await deliverUnknownResult(database, delivery, operation);
+}
+
+async function deliverUnknownResult(
+  database: ApplicationDatabase,
+  delivery: DeliveryService,
+  operation: XOperation,
+): Promise<void> {
+  await delivery.sendOwner(
+    `I could not verify the ${operation.operation} request after bounded retries. Its outcome is still unknown; check Zernio/X before trying it again.`,
+    `x-operation:${operation.logicalId}:unknown`,
+  );
+  database.database
+    .prepare(
+      "UPDATE x_operations SET next_retry_at = NULL WHERE logical_id = ?",
+    )
+    .run(operation.logicalId);
 }
 
 async function deliverTerminalResult(

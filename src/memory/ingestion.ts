@@ -63,7 +63,7 @@ export async function reconcilePendingMemory(
 ): Promise<number> {
   const rows = database.database
     .prepare(
-      `SELECT custom_id, provider_id, status, local_date, conversation_id, content, complete FROM memory_documents
+      `SELECT custom_id, provider_id, status, attempts, local_date, conversation_id, content, complete FROM memory_documents
        WHERE status NOT IN ('done', 'failed') AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
        ORDER BY updated_at LIMIT 5`,
     )
@@ -71,6 +71,7 @@ export async function reconcilePendingMemory(
     custom_id: string;
     provider_id: string | null;
     status: string;
+    attempts: number;
     local_date: string;
     conversation_id: string;
     content: string;
@@ -96,6 +97,14 @@ export async function reconcilePendingMemory(
             row.custom_id,
           );
         if (status !== "failed") continue;
+        if (row.attempts >= 3) {
+          database.database
+            .prepare(
+              "UPDATE memory_documents SET status = 'failed', next_attempt_at = NULL, updated_at = ? WHERE custom_id = ?",
+            )
+            .run(new Date().toISOString(), row.custom_id);
+          continue;
+        }
       } catch {
         database.database
           .prepare(
