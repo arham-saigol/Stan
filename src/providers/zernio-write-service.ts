@@ -79,15 +79,44 @@ export class ZernioWriteService {
         ...(targetPostId ? { targetPostId } : {}),
       });
     const targetPostId =
-      "providerPostId" in request ? request.providerPostId : undefined;
+      "providerPostId" in request
+        ? request.providerPostId
+        : request.operation === "reply"
+          ? request.replyToPostId
+          : undefined;
     const existing = this.database.getXOperationByEnvelope(envelope.id);
     if (existing) {
-      const operation = begin();
+      let operation = begin();
+      if (
+        operation.status === "publishing" &&
+        !operation.providerId &&
+        !operation.nextRetryAt
+      ) {
+        if (isRetryableCreate(operation.operation)) {
+          const recoveredAt = new Date().toISOString();
+          this.database.database
+            .prepare(
+              "UPDATE x_operations SET next_retry_at = ?, updated_at = ? WHERE logical_id = ?",
+            )
+            .run(recoveredAt, recoveredAt, operation.logicalId);
+          operation = this.database.getXOperation(operation.logicalId)!;
+        } else if (targetPostId) {
+          operation = this.database.updateXOperation(operation.logicalId, {
+            status: "publishing",
+            providerId: targetPostId,
+            error: "Provider call outcome was not recorded before recovery",
+          });
+          trackProviderPoll(this.database, operation, new Date());
+        }
+      }
       return operation;
     }
-    if ("providerPostId" in request && !targetPostId?.trim())
+    if (
+      ("providerPostId" in request || request.operation === "reply") &&
+      !targetPostId?.trim()
+    )
       throw new Error("A target X post ID is required");
-    if (targetPostId) {
+    if ("providerPostId" in request && targetPostId) {
       if (!this.provider.verifyPostAccount) {
         throw new Error("The Zernio account boundary cannot verify this post");
       }

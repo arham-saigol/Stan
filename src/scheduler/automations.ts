@@ -190,15 +190,19 @@ export class AutomationStore {
     return claimed;
   }
 
-  recoverableRuns(limit = 10): ClaimedAutomationRun[] {
+  recoverableRuns(now = new Date(), limit = 10): ClaimedAutomationRun[] {
     return (
       this.application.database
         .prepare(
           `SELECT r.occurrence_id, r.scheduled_for, r.flue_submission_id, a.*
            FROM automation_runs r JOIN automations a ON a.id = r.automation_id
-           WHERE r.status = 'unknown' ORDER BY r.updated_at LIMIT ?`,
+           WHERE r.status = 'unknown' AND (r.lease_until IS NULL OR r.lease_until <= ?)
+           ORDER BY r.updated_at LIMIT ?`,
         )
-        .all(limit) as Record<string, string | number | null>[]
+        .all(now.toISOString(), limit) as Record<
+        string,
+        string | number | null
+      >[]
     ).map((row) => ({
       occurrenceId: String(row.occurrence_id),
       automation: mapAutomation(row),
@@ -209,7 +213,11 @@ export class AutomationStore {
     }));
   }
 
-  setSubmission(occurrenceId: string, submissionId: string): void {
+  setSubmission(
+    occurrenceId: string,
+    submissionId: string,
+    now = new Date(),
+  ): void {
     this.application.database
       .prepare(
         `UPDATE automation_runs SET status = 'running', flue_submission_id = ?,
@@ -217,8 +225,34 @@ export class AutomationStore {
       )
       .run(
         submissionId,
-        new Date(Date.now() + 10 * 60_000).toISOString(),
-        new Date().toISOString(),
+        new Date(now.getTime() + 10 * 60_000).toISOString(),
+        now.toISOString(),
+        occurrenceId,
+      );
+  }
+
+  retryRun(occurrenceId: string, error: string, now = new Date()): void {
+    const row = this.application.database
+      .prepare("SELECT attempts FROM automation_runs WHERE occurrence_id = ?")
+      .get(occurrenceId) as { attempts: number } | undefined;
+    if (!row) return;
+    const attempts = row.attempts + 1;
+    const exhausted = attempts >= 3;
+    this.application.database
+      .prepare(
+        `UPDATE automation_runs SET status = ?, attempts = ?, error = ?,
+         lease_until = ?, updated_at = ? WHERE occurrence_id = ?`,
+      )
+      .run(
+        exhausted ? "failed" : "unknown",
+        attempts,
+        error,
+        exhausted
+          ? null
+          : new Date(
+              now.getTime() + 60_000 * 2 ** (attempts - 1),
+            ).toISOString(),
+        now.toISOString(),
         occurrenceId,
       );
   }

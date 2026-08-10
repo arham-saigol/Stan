@@ -77,7 +77,10 @@ export function deriveAuthorization(
 
 function isTargetedMutation(operation: AuthorizationOperation): boolean {
   return (
-    operation === "edit" || operation === "cancel" || operation === "delete"
+    operation === "reply" ||
+    operation === "edit" ||
+    operation === "cancel" ||
+    operation === "delete"
   );
 }
 

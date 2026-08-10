@@ -74,6 +74,33 @@ describe("Zernio public-write boundary", () => {
     database.close();
   });
 
+  it("requeues a create persisted before the provider call", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    authorized(database);
+    const mutate = vi.fn(async () => {
+      throw new Error("connection reset");
+    });
+    const service = new ZernioWriteService(database, { mutate });
+    const context = {
+      sourceMessageId: "owner-1",
+      selectedAccountId: "account-1",
+    };
+    const request = { operation: "publish" as const, content: "hello" };
+    const operation = await service.execute(context, request);
+    database.database
+      .prepare(
+        "UPDATE x_operations SET next_retry_at = NULL WHERE logical_id = ?",
+      )
+      .run(operation.logicalId);
+
+    const recovered = await service.execute(context, request);
+
+    expect(recovered.nextRetryAt).not.toBeNull();
+    expect(mutate).toHaveBeenCalledOnce();
+    database.close();
+  });
+
   it("rejects edits and deletions for a post outside the configured X account", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
@@ -216,6 +243,33 @@ describe("Zernio public-write boundary", () => {
       service.execute(
         { sourceMessageId: "owner-delete", selectedAccountId: "account-1" },
         { operation: "delete", providerPostId: "z-2" },
+      ),
+    ).rejects.toThrow(/target authorized by the owner/i);
+    expect(mutate).not.toHaveBeenCalled();
+    database.close();
+  });
+
+  it("rejects a reply target other than the one the owner authorized", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-reply",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "reply to X post 111",
+      receivedAt: new Date().toISOString(),
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-reply",
+      operation: "reply",
+      targetPostId: "111",
+    });
+    const mutate = vi.fn();
+    const service = new ZernioWriteService(database, { mutate });
+
+    await expect(
+      service.execute(
+        { sourceMessageId: "owner-reply", selectedAccountId: "account-1" },
+        { operation: "reply", replyToPostId: "222", content: "hello" },
       ),
     ).rejects.toThrow(/target authorized by the owner/i);
     expect(mutate).not.toHaveBeenCalled();

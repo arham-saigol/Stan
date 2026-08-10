@@ -178,7 +178,10 @@ describe("declarative automations", () => {
     const [run] = automations.claimDue(new Date("2026-08-13T04:00:00Z"));
     automations.claimDue(new Date("2026-08-13T04:11:00Z"));
     const dispatch = vi.fn(async () => "submission-recovered");
-    const read = vi.fn(async () => "recovered report");
+    const read = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("transient model outage"))
+      .mockResolvedValueOnce("recovered report");
     const scheduler = new Scheduler(
       database,
       config,
@@ -190,6 +193,20 @@ describe("declarative automations", () => {
 
     await scheduler.tick(Temporal.Instant.from("2026-08-13T04:12:00Z"));
 
+    expect(
+      database.database
+        .prepare(
+          "SELECT status, attempts, flue_submission_id FROM automation_runs WHERE occurrence_id = ?",
+        )
+        .get(run!.occurrenceId),
+    ).toEqual({
+      status: "unknown",
+      attempts: 1,
+      flue_submission_id: "submission-recovered",
+    });
+
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T04:13:00Z"));
+
     expect(dispatch).toHaveBeenCalledWith(
       "stan-owner-2026-08-13",
       expect.any(Object),
@@ -199,14 +216,17 @@ describe("declarative automations", () => {
       "stan-owner-2026-08-13",
       "submission-recovered",
     );
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledTimes(2);
     expect(
       database.database
         .prepare(
-          "SELECT status, flue_submission_id, result FROM automation_runs WHERE occurrence_id = ?",
+          "SELECT status, attempts, flue_submission_id, result FROM automation_runs WHERE occurrence_id = ?",
         )
         .get(run!.occurrenceId),
     ).toEqual({
       status: "completed",
+      attempts: 1,
       flue_submission_id: "submission-recovered",
       result: "recovered report",
     });

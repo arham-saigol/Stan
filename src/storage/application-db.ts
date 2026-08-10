@@ -149,6 +149,7 @@ CREATE TABLE IF NOT EXISTS automation_runs (
   status TEXT NOT NULL,
   lease_until TEXT,
   flue_submission_id TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
   result TEXT,
   error TEXT,
   created_at TEXT NOT NULL,
@@ -245,6 +246,12 @@ export class ApplicationDatabase {
         "automation_runs",
         "flue_submission_id",
         "TEXT",
+      );
+      addColumnIfMissing(
+        this.database,
+        "automation_runs",
+        "attempts",
+        "INTEGER NOT NULL DEFAULT 0",
       );
     });
   }
@@ -452,7 +459,8 @@ export class ApplicationDatabase {
         );
       }
       if (
-        (input.operation === "edit" ||
+        (input.operation === "reply" ||
+          input.operation === "edit" ||
           input.operation === "cancel" ||
           input.operation === "delete") &&
         (!envelope.targetPostId || envelope.targetPostId !== input.targetPostId)

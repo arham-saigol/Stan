@@ -52,5 +52,10 @@ describe("owner X authorization classification", () => {
       ),
     ).toEqual({ operation: "delete", targetPostId: "1900123456789" });
     expect(deriveAuthorization("Delete this X post")).toBeUndefined();
+    expect(deriveAuthorization("Reply to X post 1900123456789")).toEqual({
+      operation: "reply",
+      targetPostId: "1900123456789",
+    });
+    expect(deriveAuthorization("Reply to this thread")).toBeUndefined();
   });
 });

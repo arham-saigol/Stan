@@ -297,7 +297,8 @@ export class Scheduler {
       }
     }
     const claimed = this.automations.claimDue(new Date(now.epochMilliseconds));
-    const runs = [...this.automations.recoverableRuns(), ...claimed];
+    const currentDate = new Date(now.epochMilliseconds);
+    const runs = [...this.automations.recoverableRuns(currentDate), ...claimed];
     for (const run of runs) {
       let reply: string;
       try {
@@ -318,13 +319,18 @@ export class Scheduler {
             },
             run.occurrenceId,
           ));
-        this.automations.setSubmission(run.occurrenceId, submissionId);
+        this.automations.setSubmission(
+          run.occurrenceId,
+          submissionId,
+          currentDate,
+        );
         reply = await this.agent.read(sessionId, submissionId);
       } catch (error) {
-        this.automations.finishRun(run.occurrenceId, {
-          status: "failed",
-          error: safeError(error),
-        });
+        this.automations.retryRun(
+          run.occurrenceId,
+          safeError(error),
+          currentDate,
+        );
         continue;
       }
       const output = reply.slice(0, 12_000);
