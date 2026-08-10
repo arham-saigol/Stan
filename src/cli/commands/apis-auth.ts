@@ -41,7 +41,11 @@ export async function apisAuthCommand(root: string): Promise<void> {
   }
   await store.update(updates);
   console.log("API credentials validated where possible and saved.");
-  if (daemonWasRunning && Object.keys(updates).length > 0) {
+  const credentialsChanged = Object.keys(updates).length > 0;
+  const daemonIsRunning = credentialsChanged
+    ? Boolean(await getDaemonStatus(root))
+    : false;
+  if (credentialsChanged && (daemonWasRunning || daemonIsRunning)) {
     await stopService(root);
     await startService(root);
     console.log("Stan restarted with the updated provider credentials.");

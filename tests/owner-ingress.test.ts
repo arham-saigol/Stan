@@ -195,7 +195,8 @@ describe("owner-only ingress", () => {
     );
 
     const handling = ingress.handle(message({ id: "in-flight" }));
-    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    expect(dispatch).toHaveBeenCalledOnce();
 
     expect(await ingress.reconcilePending()).toBe(0);
     release("settled reply");

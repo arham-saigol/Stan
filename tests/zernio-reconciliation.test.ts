@@ -15,7 +15,16 @@ function setOperationCreatedAt(
   createdAt = "2026-08-13T00:00:00Z",
 ): void {
   database.database
-    .prepare("UPDATE x_operations SET created_at = ? WHERE logical_id = ?")
+    .prepare(
+      `UPDATE x_operations SET created_at = ?,
+       next_retry_at = CASE WHEN next_retry_at IS NULL THEN NULL ELSE ? END
+       WHERE logical_id = ?`,
+    )
+    .run(createdAt, createdAt, logicalId);
+  database.database
+    .prepare(
+      "UPDATE scheduled_publications SET next_poll_at = ? WHERE logical_operation_id = ?",
+    )
     .run(createdAt, logicalId);
 }
 
