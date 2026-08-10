@@ -242,22 +242,23 @@ describe("owner-only ingress", () => {
 
     await ingress.handle(
       message({
-        text: "Please post the second one",
-        quotedText: "Option 1\nOption 2",
+        text: "Please post the quoted draft",
+        quotedText: "Option 2",
       }),
     );
 
     expect(database.getAuthorizationForSource("wamid-1")).toMatchObject({
       operation: "publish",
       sourceMessageId: "wamid-1",
-      quotedText: "Option 1\nOption 2",
+      quotedText: "Option 2",
+      authorizedContent: "Option 2",
       createdAt: "2026-08-13T10:00:00.000Z",
       expiresAt: "2026-08-13T10:15:00.000Z",
       consumedAt: null,
     });
     expect(deliveries[0]!.metadata).toEqual({
       sourceMessageId: "wamid-1",
-      quotedText: "Option 1\nOption 2",
+      quotedText: "Option 2",
     });
   });
 });

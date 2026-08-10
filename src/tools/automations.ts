@@ -7,9 +7,10 @@ export function automationTools(
   store: AutomationStore,
   trusted: TrustedDeliveryContext,
 ): ToolDefinition[] {
-  const requireOwner = () => {
+  const requireOwner = (operation: "create" | "set_enabled" | "delete") => {
     if (trusted.kind !== "owner" || !trusted.sourceMessageId)
       throw new Error("Automation changes require a current owner message");
+    store.consumeAuthorization(trusted.sourceMessageId, operation);
     return trusted.sourceMessageId;
   };
   return [
@@ -25,28 +26,24 @@ export function automationTools(
       name: "create_automation",
       description:
         "Create a bounded declarative one-shot or cron automation in Asia/Karachi. It cannot execute shell or grant X writes.",
-      input: v.variant("scheduleType", [
-        v.object({
-          name: v.string(),
-          scheduleType: v.literal("once"),
-          at: v.string(),
-          instruction: v.string(),
-          deliveryMode: v.picklist(["silent", "owner_whatsapp"]),
-        }),
-        v.object({
-          name: v.string(),
-          scheduleType: v.literal("cron"),
-          expression: v.string(),
-          instruction: v.string(),
-          deliveryMode: v.picklist(["silent", "owner_whatsapp"]),
-        }),
-      ]),
+      input: v.object({
+        name: v.string(),
+        scheduleType: v.picklist(["once", "cron"]),
+        at: v.optional(v.string()),
+        expression: v.optional(v.string()),
+        instruction: v.string(),
+        deliveryMode: v.picklist(["silent", "owner_whatsapp"]),
+      }),
       async run({ data }) {
-        const creatorMessageId = requireOwner();
+        if (data.scheduleType === "once" && !data.at)
+          throw new Error("A one-shot automation requires an exact time");
+        if (data.scheduleType === "cron" && !data.expression)
+          throw new Error("A cron automation requires an expression");
+        const creatorMessageId = requireOwner("create");
         const schedule =
           data.scheduleType === "once"
-            ? { type: "once" as const, at: data.at }
-            : { type: "cron" as const, expression: data.expression };
+            ? { type: "once" as const, at: data.at! }
+            : { type: "cron" as const, expression: data.expression! };
         return {
           output: store.create({
             name: data.name,
@@ -64,7 +61,7 @@ export function automationTools(
         "Pause or enable one existing automation from the current owner turn.",
       input: v.object({ id: v.string(), enabled: v.boolean() }),
       async run({ data }) {
-        requireOwner();
+        requireOwner("set_enabled");
         return { output: store.setEnabled(data.id, data.enabled) };
       },
     }),
@@ -74,7 +71,7 @@ export function automationTools(
         "Delete one declarative automation from the current owner turn.",
       input: v.object({ id: v.string() }),
       async run({ data }) {
-        requireOwner();
+        requireOwner("delete");
         return { output: { deleted: store.delete(data.id) } };
       },
     }),

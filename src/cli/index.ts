@@ -48,7 +48,18 @@ const action =
 program
   .command("setup")
   .description("run resumable interactive setup")
-  .action(action(async () => setupCommand(root())));
+  .action(
+    action(async () => {
+      const stateRoot = root();
+      const daemonWasRunning = Boolean(await getDaemonStatus(stateRoot));
+      if (daemonWasRunning) await stopService(stateRoot);
+      try {
+        await setupCommand(stateRoot);
+      } finally {
+        if (daemonWasRunning) await startService(stateRoot);
+      }
+    }),
+  );
 program
   .command("auth")
   .description("authenticate OpenAI Codex and select model/thinking")

@@ -16,6 +16,7 @@ function authorized(database: ApplicationDatabase, text = "post it") {
   return database.createAuthorization({
     sourceMessageId: "owner-1",
     operation: "publish",
+    authorizedContent: "hello",
   });
 }
 
@@ -34,6 +35,46 @@ describe("Zernio public-write boundary", () => {
         { operation: "publish", content: "hello" },
       ),
     ).rejects.toThrow(/authorization/i);
+    expect(mutate).not.toHaveBeenCalled();
+    database.close();
+  });
+
+  it("rejects content and schedule values outside the exact owner approval", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-schedule",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "schedule exact post",
+      receivedAt: new Date().toISOString(),
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-schedule",
+      operation: "schedule",
+      authorizedContent: "hello",
+      authorizedScheduledFor: "2099-08-14T04:00:00.000Z",
+    });
+    const mutate = vi.fn();
+    const service = new ZernioWriteService(database, { mutate });
+    const context = {
+      sourceMessageId: "owner-schedule",
+      selectedAccountId: "account-1",
+    };
+
+    await expect(
+      service.execute(context, {
+        operation: "schedule",
+        content: "changed by model",
+        scheduledFor: "2099-08-14T04:00:00Z",
+      }),
+    ).rejects.toThrow(/exact text authorized/i);
+    await expect(
+      service.execute(context, {
+        operation: "schedule",
+        content: "hello",
+        scheduledFor: "2099-08-14T05:00:00Z",
+      }),
+    ).rejects.toThrow(/exact time authorized/i);
     expect(mutate).not.toHaveBeenCalled();
     database.close();
   });
@@ -114,6 +155,7 @@ describe("Zernio public-write boundary", () => {
       sourceMessageId: "owner-edit",
       operation: "edit",
       targetPostId: "other-account-post",
+      authorizedContent: "changed",
     });
     const mutate = vi.fn();
     const service = new ZernioWriteService(database, {
@@ -152,6 +194,7 @@ describe("Zernio public-write boundary", () => {
       sourceMessageId: "owner-edit",
       operation: "edit",
       targetPostId: "z-1",
+      authorizedContent: "changed",
     });
     const mutate = vi.fn();
     const verifyPostAccount = vi.fn();
@@ -184,6 +227,7 @@ describe("Zernio public-write boundary", () => {
       sourceMessageId: "owner-edit",
       operation: "edit",
       targetPostId: "z-1",
+      authorizedContent: "changed",
     });
     const mutate = vi.fn(async () => {
       throw new Error("connection reset after edit");
@@ -262,6 +306,7 @@ describe("Zernio public-write boundary", () => {
       sourceMessageId: "owner-reply",
       operation: "reply",
       targetPostId: "111",
+      authorizedContent: "hello",
     });
     const mutate = vi.fn();
     const service = new ZernioWriteService(database, { mutate });

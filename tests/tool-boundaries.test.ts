@@ -3,6 +3,8 @@ import type { WorkspaceStore } from "../src/workspace/store.ts";
 import { ApplicationDatabase } from "../src/storage/application-db.ts";
 import { heartbeatTools } from "../src/tools/heartbeat.ts";
 import { workspaceTools } from "../src/tools/workspace.ts";
+import { automationTools } from "../src/tools/automations.ts";
+import { AutomationStore } from "../src/scheduler/automations.ts";
 
 type Run = (context: { data: Record<string, unknown> }) => Promise<unknown>;
 
@@ -53,5 +55,38 @@ describe("trusted tool boundaries", () => {
       }),
     ).rejects.toThrow(/owner message/i);
     expect(edit).not.toHaveBeenCalled();
+  });
+
+  it("consumes explicit operation-specific automation intent", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-automation",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "create a reminder automation",
+      receivedAt: new Date().toISOString(),
+    });
+    const store = new AutomationStore(database);
+    const tool = automationTools(store, {
+      kind: "owner",
+      sourceMessageId: "owner-automation",
+    }).find((candidate) => candidate.name === "create_automation")!;
+    const input = {
+      data: {
+        name: "explicit reminder",
+        scheduleType: "once",
+        at: "2099-08-13T09:00:00+05:00",
+        instruction: "Prepare the report",
+        deliveryMode: "owner_whatsapp",
+      },
+    };
+
+    await expect((tool.run as Run)(input)).rejects.toThrow(/authorization/i);
+    database.createAutomationAuthorization("owner-automation", "create");
+    await expect((tool.run as Run)(input)).resolves.toMatchObject({
+      output: { name: "explicit reminder" },
+    });
+    await expect((tool.run as Run)(input)).rejects.toThrow(/authorization/i);
+    database.close();
   });
 });

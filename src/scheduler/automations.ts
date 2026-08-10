@@ -1,6 +1,9 @@
 import { Cron } from "croner";
 import { TIMEZONE } from "../config/schema.ts";
-import type { ApplicationDatabase } from "../storage/application-db.ts";
+import type {
+  ApplicationDatabase,
+  AutomationAuthorizationOperation,
+} from "../storage/application-db.ts";
 
 export type AutomationSchedule =
   | { type: "once"; at: string }
@@ -32,6 +35,13 @@ export interface PendingAutomationNotification {
 
 export class AutomationStore {
   constructor(private readonly application: ApplicationDatabase) {}
+
+  consumeAuthorization(
+    sourceMessageId: string,
+    operation: AutomationAuthorizationOperation,
+  ): void {
+    this.application.consumeAutomationAuthorization(sourceMessageId, operation);
+  }
 
   create(input: {
     name: string;

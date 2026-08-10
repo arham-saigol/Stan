@@ -4,7 +4,10 @@ import {
   type ApplicationDatabase,
   normalizeJid,
 } from "../storage/application-db.ts";
-import { deriveAuthorization } from "./owner-authorization.ts";
+import {
+  deriveAuthorization,
+  deriveAutomationAuthorizationOperation,
+} from "./owner-authorization.ts";
 
 export interface InboundMessage {
   id: string;
@@ -155,11 +158,29 @@ export class OwnerIngress {
             ...(authorization.targetPostId
               ? { targetPostId: authorization.targetPostId }
               : {}),
+            ...(authorization.authorizedContent
+              ? { authorizedContent: authorization.authorizedContent }
+              : {}),
+            ...(authorization.authorizedScheduledFor
+              ? {
+                  authorizedScheduledFor: authorization.authorizedScheduledFor,
+                }
+              : {}),
             ...(message.quotedText === undefined
               ? {}
               : { quotedText: message.quotedText }),
           });
         }
+      }
+      const automationOperation = deriveAutomationAuthorizationOperation(
+        message.text,
+      );
+      if (automationOperation) {
+        this.database.createAutomationAuthorization(
+          message.id,
+          automationOperation,
+          new Date(message.receivedAt),
+        );
       }
       const sessionId =
         persistedSessionId ?? dailySessionId(message.receivedAt);

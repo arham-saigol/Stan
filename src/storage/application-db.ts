@@ -10,6 +10,10 @@ export type AuthorizationOperation =
   | "edit"
   | "cancel"
   | "delete";
+export type AutomationAuthorizationOperation =
+  | "create"
+  | "set_enabled"
+  | "delete";
 export type XOperationStatus =
   | "draft"
   | "scheduled"
@@ -25,6 +29,8 @@ export interface AuthorizationEnvelope {
   sourceMessageId: string;
   quotedText: string | null;
   targetPostId: string | null;
+  authorizedContent: string | null;
+  authorizedScheduledFor: string | null;
   createdAt: string;
   expiresAt: string;
   consumedAt: string | null;
@@ -77,8 +83,16 @@ CREATE TABLE IF NOT EXISTS authorization_envelopes (
   operation TEXT NOT NULL CHECK (operation IN ('draft', 'publish', 'schedule', 'reply', 'edit', 'cancel', 'delete')),
   quoted_text TEXT,
   target_post_id TEXT,
+  authorized_content TEXT,
+  authorized_scheduled_for TEXT,
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
+  consumed_at TEXT
+) STRICT;
+CREATE TABLE IF NOT EXISTS automation_authorizations (
+  source_message_id TEXT PRIMARY KEY REFERENCES inbound_messages(provider_message_id),
+  operation TEXT NOT NULL CHECK (operation IN ('create', 'set_enabled', 'delete')),
+  created_at TEXT NOT NULL,
   consumed_at TEXT
 ) STRICT;
 CREATE TABLE IF NOT EXISTS daily_sessions (
@@ -251,6 +265,18 @@ export class ApplicationDatabase {
       );
       addColumnIfMissing(
         this.database,
+        "authorization_envelopes",
+        "authorized_content",
+        "TEXT",
+      );
+      addColumnIfMissing(
+        this.database,
+        "authorization_envelopes",
+        "authorized_scheduled_for",
+        "TEXT",
+      );
+      addColumnIfMissing(
+        this.database,
         "scheduled_publications",
         "poll_count",
         "INTEGER NOT NULL DEFAULT 0",
@@ -416,6 +442,8 @@ export class ApplicationDatabase {
     operation: AuthorizationOperation;
     quotedText?: string;
     targetPostId?: string;
+    authorizedContent?: string;
+    authorizedScheduledFor?: string;
     now?: Date;
   }): AuthorizationEnvelope {
     const now = input.now ?? new Date();
@@ -425,14 +453,17 @@ export class ApplicationDatabase {
       sourceMessageId: input.sourceMessageId,
       quotedText: input.quotedText ?? null,
       targetPostId: input.targetPostId ?? null,
+      authorizedContent: input.authorizedContent ?? null,
+      authorizedScheduledFor: input.authorizedScheduledFor ?? null,
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + 15 * 60_000).toISOString(),
       consumedAt: null,
     };
     this.database
       .prepare(
-        `INSERT INTO authorization_envelopes(id, source_message_id, operation, quoted_text, target_post_id, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO authorization_envelopes(id, source_message_id, operation, quoted_text, target_post_id,
+         authorized_content, authorized_scheduled_for, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         envelope.id,
@@ -440,6 +471,8 @@ export class ApplicationDatabase {
         envelope.operation,
         envelope.quotedText,
         envelope.targetPostId,
+        envelope.authorizedContent,
+        envelope.authorizedScheduledFor,
         envelope.createdAt,
         envelope.expiresAt,
       );
@@ -451,7 +484,8 @@ export class ApplicationDatabase {
   ): AuthorizationEnvelope | undefined {
     const row = this.database
       .prepare(
-        `SELECT id, operation, source_message_id, quoted_text, target_post_id, created_at, expires_at, consumed_at
+        `SELECT id, operation, source_message_id, quoted_text, target_post_id, authorized_content,
+         authorized_scheduled_for, created_at, expires_at, consumed_at
          FROM authorization_envelopes WHERE source_message_id = ?`,
       )
       .get(sourceMessageId) as Record<string, string | null> | undefined;
@@ -461,7 +495,8 @@ export class ApplicationDatabase {
   getAuthorization(id: string): AuthorizationEnvelope | undefined {
     const row = this.database
       .prepare(
-        `SELECT id, operation, source_message_id, quoted_text, target_post_id, created_at, expires_at, consumed_at
+        `SELECT id, operation, source_message_id, quoted_text, target_post_id, authorized_content,
+         authorized_scheduled_for, created_at, expires_at, consumed_at
          FROM authorization_envelopes WHERE id = ?`,
       )
       .get(id) as Record<string, string | null> | undefined;
@@ -476,6 +511,8 @@ export class ApplicationDatabase {
     accountId: string;
     requestJson: string;
     targetPostId?: string;
+    content?: string;
+    scheduledFor?: string;
     now?: Date;
   }): XOperation {
     return this.transaction(() => {
@@ -515,6 +552,27 @@ export class ApplicationDatabase {
         );
       }
       if (
+        (input.operation === "publish" ||
+          input.operation === "schedule" ||
+          input.operation === "reply" ||
+          input.operation === "edit") &&
+        (!envelope.authorizedContent ||
+          envelope.authorizedContent !== input.content)
+      ) {
+        throw new Error(
+          "The requested X content does not match the exact text authorized by the owner",
+        );
+      }
+      if (
+        input.operation === "schedule" &&
+        (!envelope.authorizedScheduledFor ||
+          envelope.authorizedScheduledFor !== input.scheduledFor)
+      ) {
+        throw new Error(
+          "The requested X schedule does not match the exact time authorized by the owner",
+        );
+      }
+      if (
         envelope.consumedAt ||
         Date.parse(envelope.expiresAt) <= now.getTime()
       ) {
@@ -546,6 +604,42 @@ export class ApplicationDatabase {
         );
       return this.getXOperation(logicalId)!;
     });
+  }
+
+  createAutomationAuthorization(
+    sourceMessageId: string,
+    operation: AutomationAuthorizationOperation,
+    now = new Date(),
+  ): void {
+    this.database
+      .prepare(
+        `INSERT OR IGNORE INTO automation_authorizations(source_message_id, operation, created_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(sourceMessageId, operation, now.toISOString());
+  }
+
+  consumeAutomationAuthorization(
+    sourceMessageId: string,
+    operation: AutomationAuthorizationOperation,
+  ): void {
+    const now = new Date();
+    const result = this.database
+      .prepare(
+        `UPDATE automation_authorizations SET consumed_at = ?
+         WHERE source_message_id = ? AND operation = ? AND consumed_at IS NULL AND created_at > ?`,
+      )
+      .run(
+        now.toISOString(),
+        sourceMessageId,
+        operation,
+        new Date(now.getTime() - 15 * 60_000).toISOString(),
+      );
+    if (result.changes !== 1) {
+      throw new Error(
+        `Current owner authorization is required to ${operation.replace("_", " ")} an automation`,
+      );
+    }
   }
 
   getXOperation(logicalId: string): XOperation | undefined {
@@ -638,6 +732,8 @@ function mapAuthorization(
     sourceMessageId: row.source_message_id!,
     quotedText: row.quoted_text ?? null,
     targetPostId: row.target_post_id ?? null,
+    authorizedContent: row.authorized_content ?? null,
+    authorizedScheduledFor: row.authorized_scheduled_for ?? null,
     createdAt: row.created_at!,
     expiresAt: row.expires_at!,
     consumedAt: row.consumed_at ?? null,

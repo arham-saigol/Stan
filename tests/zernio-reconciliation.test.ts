@@ -41,6 +41,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.createAuthorization({
       sourceMessageId: "owner-1",
       operation: "publish",
+      authorizedContent: "hello",
       now: new Date("2026-08-13T00:00:00Z"),
     });
     const requestIds: string[] = [];
@@ -105,6 +106,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.createAuthorization({
       sourceMessageId: "owner-1",
       operation: "publish",
+      authorizedContent: "hello",
       now: new Date("2026-08-13T00:00:00Z"),
     });
     let attempt = 0;
@@ -170,6 +172,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.createAuthorization({
       sourceMessageId: "owner-1",
       operation: "publish",
+      authorizedContent: "hello",
       now: new Date("2026-08-13T00:00:00Z"),
     });
     const provider: ZernioMutationProvider = {
@@ -235,6 +238,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.createAuthorization({
       sourceMessageId: "owner-1",
       operation: "publish",
+      authorizedContent: "hello",
       now: new Date("2026-08-13T00:00:00Z"),
     });
     const provider: ZernioMutationProvider = {
@@ -282,6 +286,8 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.createAuthorization({
       sourceMessageId: "owner-1",
       operation: "schedule",
+      authorizedContent: "hello",
+      authorizedScheduledFor: "2026-08-14T00:00:00.000Z",
       now: new Date("2026-08-13T00:00:00Z"),
     });
     let attempt = 0;
@@ -348,6 +354,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.createAuthorization({
       sourceMessageId: "owner-1",
       operation: "publish",
+      authorizedContent: "hello",
       now: new Date("2026-08-13T00:00:00Z"),
     });
     let poll = 0;
@@ -417,6 +424,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.createAuthorization({
       sourceMessageId: "owner-1",
       operation: "publish",
+      authorizedContent: "hello",
       now: new Date("2026-08-13T00:00:00Z"),
     });
     const provider = {

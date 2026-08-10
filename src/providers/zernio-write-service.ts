@@ -64,6 +64,13 @@ export class ZernioWriteService {
         "Current owner authorization is required for public X mutations",
       );
     }
+    const targetPostId =
+      "providerPostId" in request
+        ? request.providerPostId
+        : request.operation === "reply"
+          ? request.replyToPostId
+          : undefined;
+    const content = getContent(request);
     const payloadHash = hashPayload({
       accountId: context.selectedAccountId,
       request,
@@ -77,13 +84,11 @@ export class ZernioWriteService {
         accountId: context.selectedAccountId,
         requestJson: stableJson(request),
         ...(targetPostId ? { targetPostId } : {}),
+        ...(content ? { content } : {}),
+        ...(request.operation === "schedule"
+          ? { scheduledFor: new Date(request.scheduledFor).toISOString() }
+          : {}),
       });
-    const targetPostId =
-      "providerPostId" in request
-        ? request.providerPostId
-        : request.operation === "reply"
-          ? request.replyToPostId
-          : undefined;
     const existing = this.database.getXOperationByEnvelope(envelope.id);
     if (existing) {
       let operation = begin();
@@ -309,6 +314,10 @@ function isDefinitiveProviderFailure(error: unknown): boolean {
     statusCode !== 409 &&
     statusCode !== 429
   );
+}
+
+function getContent(request: ZernioMutationRequest): string | undefined {
+  return "content" in request ? request.content : undefined;
 }
 
 export function trackProviderPoll(

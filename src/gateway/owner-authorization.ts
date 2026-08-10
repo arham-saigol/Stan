@@ -1,8 +1,13 @@
-import type { AuthorizationOperation } from "../storage/application-db.ts";
+import type {
+  AuthorizationOperation,
+  AutomationAuthorizationOperation,
+} from "../storage/application-db.ts";
 
 export interface DerivedAuthorization {
   operation: AuthorizationOperation;
   targetPostId?: string;
+  authorizedContent?: string;
+  authorizedScheduledFor?: string;
 }
 
 const prefixes =
@@ -70,9 +75,67 @@ export function deriveAuthorization(
 ): DerivedAuthorization | undefined {
   const operation = deriveAuthorizationOperation(text);
   if (!operation) return undefined;
-  if (!isTargetedMutation(operation)) return { operation };
+  const authorizedContent = contentOperation(operation)
+    ? quotedText?.trim()
+    : undefined;
+  if (contentOperation(operation) && !authorizedContent) return undefined;
+  const authorizedScheduledFor =
+    operation === "schedule" ? extractScheduledInstant(text) : undefined;
+  if (operation === "schedule" && !authorizedScheduledFor) return undefined;
+  if (!isTargetedMutation(operation)) {
+    return {
+      operation,
+      ...(authorizedContent ? { authorizedContent } : {}),
+      ...(authorizedScheduledFor ? { authorizedScheduledFor } : {}),
+    };
+  }
   const targetPostId = extractTargetPostId(`${text}\n${quotedText ?? ""}`);
-  return targetPostId ? { operation, targetPostId } : undefined;
+  return targetPostId
+    ? {
+        operation,
+        targetPostId,
+        ...(authorizedContent ? { authorizedContent } : {}),
+      }
+    : undefined;
+}
+
+export function deriveAutomationAuthorizationOperation(
+  text: string,
+): AutomationAuthorizationOperation | undefined {
+  const normalized = text.trim().replace(prefixes, "");
+  if (
+    /^(?:create|add|schedule|set\s+up)\b.*\b(?:automation|reminder|recurring\s+job)\b/i.test(
+      normalized,
+    )
+  )
+    return "create";
+  if (
+    /^(?:pause|disable|enable|resume)\b.*\b(?:automation|reminder|job)\b/i.test(
+      normalized,
+    )
+  )
+    return "set_enabled";
+  if (/^(?:delete|remove)\b.*\b(?:automation|reminder|job)\b/i.test(normalized))
+    return "delete";
+  return undefined;
+}
+
+function contentOperation(operation: AuthorizationOperation): boolean {
+  return (
+    operation === "publish" ||
+    operation === "schedule" ||
+    operation === "reply" ||
+    operation === "edit"
+  );
+}
+
+function extractScheduledInstant(text: string): string | undefined {
+  const match =
+    /\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))\b/i.exec(
+      text,
+    );
+  if (!match || !Number.isFinite(Date.parse(match[1]!))) return undefined;
+  return new Date(match[1]!).toISOString();
 }
 
 function isTargetedMutation(operation: AuthorizationOperation): boolean {

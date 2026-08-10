@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveAuthorization,
   deriveAuthorizationOperation,
+  deriveAutomationAuthorizationOperation,
 } from "../src/gateway/owner-authorization.ts";
 
 describe("owner X authorization classification", () => {
@@ -52,10 +53,47 @@ describe("owner X authorization classification", () => {
       ),
     ).toEqual({ operation: "delete", targetPostId: "1900123456789" });
     expect(deriveAuthorization("Delete this X post")).toBeUndefined();
-    expect(deriveAuthorization("Reply to X post 1900123456789")).toEqual({
+    expect(
+      deriveAuthorization("Reply to X post 1900123456789", "Exact reply"),
+    ).toEqual({
       operation: "reply",
       targetPostId: "1900123456789",
+      authorizedContent: "Exact reply",
     });
     expect(deriveAuthorization("Reply to this thread")).toBeUndefined();
+  });
+
+  it("requires exact content and an explicit ISO instant for schedules", () => {
+    expect(
+      deriveAuthorization(
+        "Schedule this X post for 2026-08-14T09:00:00+05:00",
+        "Exact post text",
+      ),
+    ).toEqual({
+      operation: "schedule",
+      authorizedContent: "Exact post text",
+      authorizedScheduledFor: "2026-08-14T04:00:00.000Z",
+    });
+    expect(
+      deriveAuthorization("Post this on X", "Exact post text"),
+    ).toMatchObject({
+      operation: "publish",
+      authorizedContent: "Exact post text",
+    });
+    expect(deriveAuthorization("Post this on X")).toBeUndefined();
+  });
+
+  it("requires an explicit automation mutation verb and object", () => {
+    expect(
+      deriveAutomationAuthorizationOperation(
+        "Please schedule a research reminder automation",
+      ),
+    ).toBe("create");
+    expect(
+      deriveAutomationAuthorizationOperation("Delete the daily automation"),
+    ).toBe("delete");
+    expect(
+      deriveAutomationAuthorizationOperation("Research our automation rate"),
+    ).toBeUndefined();
   });
 });
