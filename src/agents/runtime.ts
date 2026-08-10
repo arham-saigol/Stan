@@ -32,28 +32,46 @@ export class StanAgentRuntime {
     return this.active > 0;
   }
 
-  async deliver(
+  async dispatch(
     conversationId: string,
     message: DeliveredMessage,
+    idempotencyKey?: string,
   ): Promise<string> {
+    if (!this.flue) throw new Error("Stan agent runtime is not started");
+    const semantic =
+      !idempotencyKey && this.semanticContext
+        ? await this.semanticContext(message.body)
+        : undefined;
+    const enriched = semantic
+      ? {
+          ...message,
+          body: `${message.body}\n\n<semantic-memory untrusted="true">\n${semantic}\n</semantic-memory>`,
+        }
+      : message;
+    const handle = init(Stan, { id: conversationId });
+    const receipt = await handle.dispatch({
+      message: enriched,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    });
+    return receipt.submissionId;
+  }
+
+  async read(conversationId: string, submissionId: string): Promise<string> {
     if (!this.flue) throw new Error("Stan agent runtime is not started");
     this.active += 1;
     try {
-      const semantic = this.semanticContext
-        ? await this.semanticContext(message.body)
-        : undefined;
-      const enriched = semantic
-        ? {
-            ...message,
-            body: `${message.body}\n\n<semantic-memory untrusted="true">\n${semantic}\n</semantic-memory>`,
-          }
-        : message;
-      const handle = init(Stan, { id: conversationId });
-      const receipt = await handle.dispatch({ message: enriched });
-      const reply = await handle.read(receipt);
+      const reply = await init(Stan, { id: conversationId }).read(submissionId);
       return reply.text;
     } finally {
       this.active -= 1;
     }
+  }
+
+  async deliver(
+    conversationId: string,
+    message: DeliveredMessage,
+  ): Promise<string> {
+    const submissionId = await this.dispatch(conversationId, message);
+    return this.read(conversationId, submissionId);
   }
 }

@@ -26,6 +26,19 @@ describe("bounded workspace", () => {
     expect(history).toHaveLength(1);
   });
 
+  it("serializes concurrent edits so one accepted change cannot overwrite another", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-workspace-"));
+    const store = new WorkspaceStore(root, { maxBytes: 1024 });
+    await store.initialize();
+
+    await Promise.all([
+      store.edit("goals", { operation: "append", text: "\nfirst" }, "one"),
+      store.edit("goals", { operation: "append", text: "\nsecond" }, "two"),
+    ]);
+
+    expect(await store.read("goals")).toMatch(/first\nsecond$/);
+  });
+
   it("rejects traversal, symlinks, oversized writes and stale replacements", async () => {
     const root = await mkdtemp(join(tmpdir(), "stan-workspace-"));
     const outside = join(root, "..", `outside-${crypto.randomUUID()}.md`);

@@ -18,7 +18,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
       body: "post it",
       receivedAt: "2026-08-13T00:00:00Z",
     });
-    const envelope = database.createAuthorization({
+    database.createAuthorization({
       sourceMessageId: "owner-1",
       operation: "publish",
       now: new Date("2026-08-13T00:00:00Z"),
@@ -50,7 +50,6 @@ describe("ambiguous Zernio operation reconciliation", () => {
     const initial = await service.execute(
       {
         sourceMessageId: "owner-1",
-        authorizationEnvelopeId: envelope.id,
         selectedAccountId: "account-1",
       },
       { operation: "publish", content: "hello" },

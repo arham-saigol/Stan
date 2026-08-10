@@ -27,8 +27,8 @@ export class Scheduler {
 
   start(): void {
     if (this.timer) return;
-    this.trigger(true);
-    this.timer = setInterval(() => this.trigger(false), 30_000);
+    this.trigger();
+    this.timer = setInterval(() => this.trigger(), 30_000);
     this.timer.unref();
   }
 
@@ -38,9 +38,9 @@ export class Scheduler {
     await this.activeTick;
   }
 
-  private trigger(startup: boolean): void {
+  private trigger(): void {
     if (this.activeTick) return;
-    this.activeTick = this.tick(startup)
+    this.activeTick = this.tick()
       .catch((error: unknown) => {
         this.logger.error({ error: safeError(error) }, "Scheduler tick failed");
       })
@@ -49,7 +49,7 @@ export class Scheduler {
       });
   }
 
-  async tick(startup: boolean, now = Temporal.Now.instant()): Promise<void> {
+  async tick(now = Temporal.Now.instant()): Promise<void> {
     if (this.maintenance) {
       try {
         await this.maintenance(now);
@@ -68,13 +68,12 @@ export class Scheduler {
       )
       .run(now.toString(), now.toString());
     const config = this.config.read();
-    await this.runHeartbeat(config, startup, now);
+    await this.runHeartbeat(config, now);
     await this.runAutomations(now);
   }
 
   private async runHeartbeat(
     config: StanConfig,
-    startup: boolean,
     now: Temporal.Instant,
   ): Promise<void> {
     if (!config.heartbeat.enabled) return;
@@ -88,7 +87,6 @@ export class Scheduler {
       ).map((row) => row.occurrence_id),
     );
     const occurrence = dueHeartbeat(now, config.heartbeat, {
-      startup,
       completedOccurrenceIds: completed,
     });
     if (!occurrence) return;
@@ -103,6 +101,7 @@ export class Scheduler {
         ? now.epochMilliseconds - Date.parse(lastOwner.received_at) <
           30 * 60_000
         : false;
+    if (occurrence.kind === "morning" && this.agent.isBusy()) return;
     const status = this.agent.isBusy()
       ? "busy"
       : recentlyActive
@@ -125,7 +124,21 @@ export class Scheduler {
         timestamp,
         timestamp,
       );
-    if (inserted.changes === 0 || status !== "leased") return;
+    if (status !== "leased") return;
+    if (inserted.changes === 0) {
+      if (occurrence.kind !== "morning") return;
+      const reclaimed = this.database.database
+        .prepare(
+          `UPDATE heartbeat_occurrences SET status = 'leased', lease_until = ?, updated_at = ?
+           WHERE occurrence_id = ? AND status IN ('busy', 'failed')`,
+        )
+        .run(
+          new Date(now.epochMilliseconds + 10 * 60_000).toISOString(),
+          timestamp,
+          occurrence.id,
+        );
+      if (reclaimed.changes === 0) return;
+    }
     this.database.database
       .prepare(
         "UPDATE heartbeat_occurrences SET status = 'running', updated_at = ? WHERE occurrence_id = ?",

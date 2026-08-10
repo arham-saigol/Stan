@@ -85,9 +85,6 @@ function classifyDelivery(delivery: DeliveredMessage): TrustedDeliveryContext {
     return {
       kind: "owner",
       sourceMessageId: attributes.sourceMessageId,
-      ...(attributes.authorizationEnvelopeId
-        ? { authorizationEnvelopeId: attributes.authorizationEnvelopeId }
-        : {}),
     };
   }
   if (delivery.type === "heartbeat" && attributes.occurrenceId) {

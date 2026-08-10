@@ -37,7 +37,8 @@ export async function statusCommand(root: string): Promise<void> {
           `SELECT
              (SELECT COUNT(*) FROM inbound_messages WHERE state = 'unknown') +
              (SELECT COUNT(*) FROM automation_runs WHERE status = 'unknown') +
-             (SELECT COUNT(*) FROM x_operations WHERE status = 'publishing' AND next_retry_at IS NULL AND retry_count >= 3)
+             (SELECT COUNT(*) FROM x_operations x WHERE status = 'publishing' AND next_retry_at IS NULL
+                AND NOT EXISTS (SELECT 1 FROM scheduled_publications s WHERE s.logical_operation_id = x.logical_id))
            AS count`,
         )
         .get() as { count: number }

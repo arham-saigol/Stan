@@ -27,6 +27,7 @@ interface HistoryEntry {
 
 export class WorkspaceStore {
   private readonly maxBytes: number;
+  private editQueue = Promise.resolve();
 
   constructor(
     private readonly root: string,
@@ -74,7 +75,22 @@ export class WorkspaceStore {
     return content;
   }
 
-  async edit(
+  edit(
+    file: WorkspaceFile,
+    edit: WorkspaceEdit,
+    sourceMessageId: string,
+  ): Promise<string> {
+    const result = this.editQueue.then(() =>
+      this.applyEdit(file, edit, sourceMessageId),
+    );
+    this.editQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private async applyEdit(
     file: WorkspaceFile,
     edit: WorkspaceEdit,
     sourceMessageId: string,

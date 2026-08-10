@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS inbound_messages (
   received_at TEXT NOT NULL,
   state TEXT NOT NULL CHECK (state IN ('claimed', 'dispatched', 'reply_pending', 'delivered', 'failed', 'unknown')),
   session_id TEXT,
+  flue_submission_id TEXT,
   response_text TEXT,
   outbound_message_id TEXT,
   error TEXT
@@ -304,6 +305,7 @@ export class ApplicationDatabase {
     state: "dispatched" | "reply_pending" | "delivered" | "failed" | "unknown",
     values: {
       sessionId?: string;
+      flueSubmissionId?: string;
       responseText?: string;
       outboundMessageId?: string;
       error?: string;
@@ -312,12 +314,14 @@ export class ApplicationDatabase {
     this.database
       .prepare(
         `UPDATE inbound_messages SET state = ?, session_id = COALESCE(?, session_id),
-         response_text = COALESCE(?, response_text), outbound_message_id = COALESCE(?, outbound_message_id),
-         error = COALESCE(?, error) WHERE provider_message_id = ?`,
+         flue_submission_id = COALESCE(?, flue_submission_id), response_text = COALESCE(?, response_text),
+         outbound_message_id = COALESCE(?, outbound_message_id), error = COALESCE(?, error)
+         WHERE provider_message_id = ?`,
       )
       .run(
         state,
         values.sessionId ?? null,
+        values.flueSubmissionId ?? null,
         values.responseText ?? null,
         values.outboundMessageId ?? null,
         values.error ?? null,

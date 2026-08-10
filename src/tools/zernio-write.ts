@@ -4,6 +4,7 @@ import type {
   ZernioWriteService,
   ZernioMutationRequest,
 } from "../providers/zernio-write-service.ts";
+import type { XOperation } from "../storage/application-db.ts";
 import type { TrustedDeliveryContext } from "./types.ts";
 
 const content = v.pipe(v.string(), v.minLength(1), v.maxLength(25_000));
@@ -18,15 +19,14 @@ export function zernioWriteTools(
       throw new Error("Zernio and a bound X account must be configured");
     if (!trusted.sourceMessageId)
       throw new Error("A current authenticated owner message is required");
-    return service.execute(
-      {
-        sourceMessageId: trusted.sourceMessageId,
-        ...(trusted.authorizationEnvelopeId
-          ? { authorizationEnvelopeId: trusted.authorizationEnvelopeId }
-          : {}),
-        selectedAccountId,
-      },
-      request,
+    return publicResult(
+      await service.execute(
+        {
+          sourceMessageId: trusted.sourceMessageId,
+          selectedAccountId,
+        },
+        request,
+      ),
     );
   };
   return [
@@ -141,4 +141,16 @@ export function zernioWriteTools(
       },
     }),
   ];
+}
+
+function publicResult(operation: XOperation) {
+  return {
+    operation: operation.operation,
+    status: operation.status,
+    providerId: operation.providerId,
+    publicId: operation.publicId,
+    publicUrl: operation.publicUrl,
+    scheduledFor: operation.scheduledFor,
+    error: operation.error,
+  };
 }

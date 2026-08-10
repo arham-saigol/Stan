@@ -6,6 +6,7 @@ import { ApplicationDatabase } from "../src/storage/application-db.ts";
 import {
   OwnerIngress,
   type InboundMessage,
+  type OwnerDispatch,
 } from "../src/gateway/owner-ingress.ts";
 
 const ownerPhone = "+923001234567";
@@ -32,10 +33,21 @@ async function harness() {
   databases.push(database);
   database.migrate();
   database.bindOwnerIdentity(ownerJid, "pn");
-  const dispatch = vi.fn(async () => "Here is a draft.");
+  const deliveries: Parameters<OwnerDispatch>[0][] = [];
+  const dispatch = vi.fn(async (delivery: Parameters<OwnerDispatch>[0]) => {
+    deliveries.push(delivery);
+    return "submission-1";
+  });
+  const read = vi.fn(async () => "Here is a draft.");
   const send = vi.fn(async () => ({ messageId: "out-1" }));
-  const ingress = new OwnerIngress({ database, ownerPhone, dispatch, send });
-  return { root, database, dispatch, send, ingress };
+  const ingress = new OwnerIngress({
+    database,
+    ownerPhone,
+    dispatch,
+    read,
+    send,
+  });
+  return { root, database, deliveries, dispatch, read, send, ingress };
 }
 
 describe("owner-only ingress", () => {
@@ -76,10 +88,14 @@ describe("owner-only ingress", () => {
       database: reopened,
       ownerPhone,
       dispatch,
+      read: async () => "Here is a draft.",
       send,
     });
     expect(await restarted.handle(message())).toEqual({ status: "duplicate" });
     expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: "whatsapp:wamid-1" }),
+    );
     expect(send).toHaveBeenCalledTimes(1);
   });
 
@@ -102,6 +118,7 @@ describe("owner-only ingress", () => {
       database,
       ownerPhone: newOwnerPhone,
       dispatch,
+      read: async () => "ok",
       send,
     });
 
@@ -119,8 +136,38 @@ describe("owner-only ingress", () => {
     database.close();
   });
 
+  it("reattaches to an admitted Flue submission after a daemon restart", async () => {
+    const { database, ingress, dispatch, read, send } = await harness();
+    database.claimInbound({
+      id: "recover-me",
+      senderIdentity: ownerJid,
+      body: "draft a post",
+      receivedAt: "2026-08-13T10:00:00.000Z",
+    });
+    database.setInboundState("recover-me", "dispatched", {
+      sessionId: "stan-owner-2026-08-13",
+      flueSubmissionId: "submission-existing",
+    });
+
+    expect(await ingress.reconcilePending()).toBe(1);
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(read).toHaveBeenCalledWith(
+      "stan-owner-2026-08-13",
+      "submission-existing",
+    );
+    expect(send).toHaveBeenCalledOnce();
+    expect(
+      database.database
+        .prepare(
+          "SELECT state FROM inbound_messages WHERE provider_message_id = 'recover-me'",
+        )
+        .get(),
+    ).toEqual({ state: "delivered" });
+  });
+
   it("derives one expiring publish envelope from an explicit owner command", async () => {
-    const { ingress, database } = await harness();
+    const { ingress, database, deliveries } = await harness();
 
     await ingress.handle(
       message({
@@ -133,7 +180,13 @@ describe("owner-only ingress", () => {
       operation: "publish",
       sourceMessageId: "wamid-1",
       quotedText: "Option 1\nOption 2",
+      createdAt: "2026-08-13T10:00:00.000Z",
+      expiresAt: "2026-08-13T10:15:00.000Z",
       consumedAt: null,
+    });
+    expect(deliveries[0]!.metadata).toEqual({
+      sourceMessageId: "wamid-1",
+      quotedText: "Option 1\nOption 2",
     });
   });
 });

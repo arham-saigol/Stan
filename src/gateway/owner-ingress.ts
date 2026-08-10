@@ -22,12 +22,16 @@ export interface OwnerDispatch {
   (delivery: {
     sessionId: string;
     body: string;
+    idempotencyKey: string;
     metadata: {
       sourceMessageId: string;
-      authorizationEnvelopeId?: string;
       quotedText?: string;
     };
   }): Promise<string>;
+}
+
+export interface OwnerRead {
+  (sessionId: string, submissionId: string): Promise<string>;
 }
 
 export interface OwnerSend {
@@ -37,16 +41,19 @@ export interface OwnerSend {
 export class OwnerIngress {
   private readonly database: ApplicationDatabase;
   private readonly dispatch: OwnerDispatch;
+  private readonly read: OwnerRead;
   private readonly send: OwnerSend;
 
   constructor(input: {
     database: ApplicationDatabase;
     ownerPhone: string;
     dispatch: OwnerDispatch;
+    read: OwnerRead;
     send: OwnerSend;
   }) {
     this.database = input.database;
     this.dispatch = input.dispatch;
+    this.read = input.read;
     this.send = input.send;
     this.database.configureOwnerIdentity(
       `${input.ownerPhone.slice(1)}@s.whatsapp.net`,
@@ -83,30 +90,83 @@ export class OwnerIngress {
     });
     if (!claimed) return { status: "duplicate" };
 
+    return this.process(message);
+  }
+
+  async reconcilePending(limit = 5): Promise<number> {
+    const rows = this.database.database
+      .prepare(
+        `SELECT provider_message_id, sender_identity, body, quoted_text, received_at, session_id, flue_submission_id
+         FROM inbound_messages
+         WHERE state IN ('claimed', 'dispatched', 'unknown') AND response_text IS NULL
+         ORDER BY received_at LIMIT ?`,
+      )
+      .all(limit) as {
+      provider_message_id: string;
+      sender_identity: string;
+      body: string;
+      quoted_text: string | null;
+      received_at: string;
+      session_id: string | null;
+      flue_submission_id: string | null;
+    }[];
+    for (const row of rows) {
+      await this.process(
+        {
+          id: row.provider_message_id,
+          type: "notify",
+          remoteJid: row.sender_identity,
+          fromMe: false,
+          text: row.body,
+          ...(row.quoted_text === null ? {} : { quotedText: row.quoted_text }),
+          receivedAt: row.received_at,
+        },
+        row.session_id ?? undefined,
+        row.flue_submission_id ?? undefined,
+      );
+    }
+    return rows.length;
+  }
+
+  private async process(
+    message: InboundMessage,
+    persistedSessionId?: string,
+    persistedSubmissionId?: string,
+  ): Promise<{ status: "delivered" | "failed" }> {
     try {
-      const operation = deriveAuthorizationOperation(message.text);
-      const envelope = operation
-        ? this.database.createAuthorization({
+      if (!this.database.getAuthorizationForSource(message.id)) {
+        const operation = deriveAuthorizationOperation(message.text);
+        if (operation) {
+          this.database.createAuthorization({
             sourceMessageId: message.id,
             operation,
+            now: new Date(message.receivedAt),
             ...(message.quotedText === undefined
               ? {}
               : { quotedText: message.quotedText }),
-          })
-        : undefined;
-      const sessionId = dailySessionId(message.receivedAt);
+          });
+        }
+      }
+      const sessionId =
+        persistedSessionId ?? dailySessionId(message.receivedAt);
       this.database.setInboundState(message.id, "dispatched", { sessionId });
-      const response = await this.dispatch({
-        sessionId,
-        body: message.text,
-        metadata: {
-          sourceMessageId: message.id,
-          ...(envelope ? { authorizationEnvelopeId: envelope.id } : {}),
-          ...(message.quotedText === undefined
-            ? {}
-            : { quotedText: message.quotedText }),
-        },
+      const submissionId =
+        persistedSubmissionId ??
+        (await this.dispatch({
+          sessionId,
+          body: message.text,
+          idempotencyKey: `whatsapp:${message.id}`,
+          metadata: {
+            sourceMessageId: message.id,
+            ...(message.quotedText === undefined
+              ? {}
+              : { quotedText: message.quotedText }),
+          },
+        }));
+      this.database.setInboundState(message.id, "dispatched", {
+        flueSubmissionId: submissionId,
       });
+      const response = await this.read(sessionId, submissionId);
       this.database.setInboundState(message.id, "reply_pending", {
         responseText: response,
       });

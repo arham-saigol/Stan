@@ -56,7 +56,6 @@ export function dueHeartbeat(
   now: string | Temporal.Instant,
   config: HeartbeatConfig,
   options: {
-    startup?: boolean;
     completedOccurrenceIds?: ReadonlySet<string>;
   } = {},
 ): HeartbeatOccurrence | undefined {
@@ -77,7 +76,6 @@ export function dueHeartbeat(
     );
   });
   if (exact && !completed.has(exact.id)) return exact;
-  if (!options.startup) return undefined;
   const morning = candidates.find(
     (occurrence) =>
       occurrence.kind === "morning" &&

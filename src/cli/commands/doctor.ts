@@ -1,5 +1,6 @@
 import { access, lstat } from "node:fs/promises";
 import { constants } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { verifyCodexRefresh } from "../../auth/codex.ts";
 import { CredentialStore } from "../../config/credentials.ts";
 import { ConfigStore } from "../../config/store.ts";
@@ -8,7 +9,6 @@ import { redactForLogging } from "../../logging.ts";
 import { ZernioProvider } from "../../providers/zernio.ts";
 import { XQuikProvider } from "../../providers/xquik.ts";
 import { statePaths } from "../../state.ts";
-import { ApplicationDatabase } from "../../storage/application-db.ts";
 import { WorkspaceStore, WORKSPACE_FILES } from "../../workspace/store.ts";
 import { getDaemonStatus } from "./service.ts";
 
@@ -42,15 +42,15 @@ export async function doctorCommand(root: string): Promise<void> {
   });
   const credentials = new CredentialStore(root).tryRead();
   await run("database", async () => {
-    const db = new ApplicationDatabase(paths.applicationDb);
+    await access(paths.applicationDb, constants.R_OK);
+    const database = new DatabaseSync(paths.applicationDb, { readOnly: true });
     try {
-      db.migrate();
-      const row = db.database.prepare("PRAGMA integrity_check").get() as {
+      const row = database.prepare("PRAGMA integrity_check").get() as {
         integrity_check: string;
       };
       if (row.integrity_check !== "ok") throw new Error(row.integrity_check);
       const leases = (
-        db.database
+        database
           .prepare(
             "SELECT COUNT(*) AS count FROM heartbeat_occurrences WHERE lease_until < ? AND status IN ('leased', 'running')",
           )
@@ -58,7 +58,7 @@ export async function doctorCommand(root: string): Promise<void> {
       ).count;
       return `integrity ok; ${leases} expired scheduler leases`;
     } finally {
-      db.close();
+      database.close();
     }
   });
   await run("workspace", async () => {
@@ -81,10 +81,10 @@ export async function doctorCommand(root: string): Promise<void> {
     detail: daemon ? "running" : "stopped",
   });
   await run("WhatsApp auth", async () => {
-    const db = new ApplicationDatabase(paths.applicationDb);
+    const database = new DatabaseSync(paths.applicationDb, { readOnly: true });
     try {
       const count = (
-        db.database
+        database
           .prepare(
             "SELECT COUNT(*) AS count FROM whatsapp_auth WHERE category = 'creds'",
           )
@@ -95,7 +95,7 @@ export async function doctorCommand(root: string): Promise<void> {
         ? `credentials present; ${daemon.whatsapp}`
         : "credentials present; daemon stopped";
     } finally {
-      db.close();
+      database.close();
     }
   });
   if (credentials?.zernioApiKey)

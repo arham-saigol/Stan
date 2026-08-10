@@ -41,18 +41,13 @@ describe("Pakistan-time heartbeat cadence", () => {
   });
 
   it("allows one morning startup catch-up but never burst-replays regular ticks", () => {
-    const morning = dueHeartbeat("2026-08-13T05:00:00Z", config.heartbeat, {
-      startup: true,
-    }); // 10:00 PKT
-    const late = dueHeartbeat("2026-08-13T10:10:00Z", config.heartbeat, {
-      startup: true,
-    }); // 15:10 PKT
+    const morning = dueHeartbeat("2026-08-13T05:00:00Z", config.heartbeat); // 10:00 PKT
+    const late = dueHeartbeat("2026-08-13T10:10:00Z", config.heartbeat); // 15:10 PKT
 
     expect(morning).toMatchObject({ kind: "morning", localTime: "09:00" });
     expect(late).toBeUndefined();
     expect(
       dueHeartbeat("2026-08-13T05:00:00Z", config.heartbeat, {
-        startup: true,
         completedOccurrenceIds: new Set([morning!.id]),
       }),
     ).toBeUndefined();

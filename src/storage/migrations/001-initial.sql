@@ -1,2 +1,0 @@
--- Application schema is kept beside ApplicationDatabase.migrate so installed source
--- and doctor output can expose the exact initial migration. See application-db.ts.

@@ -103,21 +103,23 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
     const ingress: OwnerIngress = new OwnerIngress({
       database,
       ownerPhone: config.ownerPhone,
-      dispatch: ({ sessionId, body, metadata }) =>
-        agent.deliver(sessionId, {
-          kind: "signal",
-          type: "owner.message",
-          body,
-          attributes: {
-            sourceMessageId: metadata.sourceMessageId,
-            ...(metadata.authorizationEnvelopeId
-              ? { authorizationEnvelopeId: metadata.authorizationEnvelopeId }
-              : {}),
-            ...(metadata.quotedText
-              ? { quoted: metadata.quotedText.slice(0, 4000) }
-              : {}),
+      dispatch: ({ sessionId, body, idempotencyKey, metadata }) =>
+        agent.dispatch(
+          sessionId,
+          {
+            kind: "signal",
+            type: "owner.message",
+            body,
+            attributes: {
+              sourceMessageId: metadata.sourceMessageId,
+              ...(metadata.quotedText
+                ? { quoted: metadata.quotedText.slice(0, 4000) }
+                : {}),
+            },
           },
-        }),
+          idempotencyKey,
+        ),
+      read: (sessionId, submissionId) => agent.read(sessionId, submissionId),
       send: (text, sourceMessageId) =>
         delivery.sendOwner(text, `owner-reply:${sourceMessageId}`),
     });
@@ -138,6 +140,7 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
       logger,
       async (now) => {
         await repairDailyRollover(database, memory, logger, now);
+        await ingress.reconcilePending();
         await reconcilePendingReplies(database, delivery);
         if (memory) await reconcilePendingMemory(database, memory);
         if (zernio) {

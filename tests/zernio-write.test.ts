@@ -41,7 +41,7 @@ describe("Zernio public-write boundary", () => {
   it("reuses one request id across an ambiguous timeout and retry", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
-    const envelope = authorized(database);
+    authorized(database);
     const posts = new Map<string, string>();
     let first = true;
     const mutate = vi.fn(async (input: { requestId: string }) => {
@@ -60,7 +60,6 @@ describe("Zernio public-write boundary", () => {
     const service = new ZernioWriteService(database, { mutate });
     const context = {
       sourceMessageId: "owner-1",
-      authorizationEnvelopeId: envelope.id,
       selectedAccountId: "account-1",
     };
     const request = { operation: "publish" as const, content: "hello" };
@@ -104,7 +103,6 @@ describe("Zernio public-write boundary", () => {
       service.execute(
         {
           sourceMessageId: "owner-edit",
-          authorizationEnvelopeId: envelope.id,
           selectedAccountId: "account-1",
         },
         {
@@ -119,10 +117,50 @@ describe("Zernio public-write boundary", () => {
     database.close();
   });
 
+  it("does not repeat a non-idempotent edit after an ambiguous provider outcome", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-edit",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "edit X post z-1",
+      receivedAt: new Date().toISOString(),
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-edit",
+      operation: "edit",
+    });
+    const mutate = vi.fn(async () => {
+      throw new Error("connection reset after edit");
+    });
+    const service = new ZernioWriteService(database, {
+      mutate,
+      verifyPostAccount: vi.fn(async () => true),
+    });
+    const context = {
+      sourceMessageId: "owner-edit",
+      selectedAccountId: "account-1",
+    };
+    const request = {
+      operation: "edit" as const,
+      providerPostId: "z-1",
+      content: "changed",
+    };
+
+    const first = await service.execute(context, request);
+    const repeated = await service.execute(context, request);
+
+    expect(first.status).toBe("publishing");
+    expect(first.nextRetryAt).toBeNull();
+    expect(repeated.logicalId).toBe(first.logicalId);
+    expect(mutate).toHaveBeenCalledOnce();
+    database.close();
+  });
+
   it("polls provider state when an immediate create is accepted but still publishing", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
-    const envelope = authorized(database);
+    authorized(database);
     const service = new ZernioWriteService(database, {
       mutate: vi.fn(async () => ({
         status: "publishing" as const,
@@ -133,7 +171,6 @@ describe("Zernio public-write boundary", () => {
     const result = await service.execute(
       {
         sourceMessageId: "owner-1",
-        authorizationEnvelopeId: envelope.id,
         selectedAccountId: "account-1",
       },
       { operation: "publish", content: "hello" },
@@ -152,7 +189,7 @@ describe("Zernio public-write boundary", () => {
   it("never reports published without a verified public id and URL", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
-    const envelope = authorized(database);
+    authorized(database);
     const service = new ZernioWriteService(database, {
       mutate: vi.fn(async () => ({
         status: "published" as const,
@@ -163,7 +200,6 @@ describe("Zernio public-write boundary", () => {
     const result = await service.execute(
       {
         sourceMessageId: "owner-1",
-        authorizationEnvelopeId: envelope.id,
         selectedAccountId: "account-1",
       },
       { operation: "publish", content: "hello" },

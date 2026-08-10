@@ -19,8 +19,9 @@ describe("heartbeat execution", () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
     const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
+    let busy = true;
     const agent = {
-      isBusy: () => false,
+      isBusy: () => busy,
       deliver: vi.fn(
         async (
           _id: string,
@@ -55,9 +56,10 @@ describe("heartbeat execution", () => {
       },
     );
 
-    await scheduler.tick(false, Temporal.Instant.from("2026-08-13T04:00:00Z")); // 09:00
-    await scheduler.tick(false, Temporal.Instant.from("2026-08-13T04:00:30Z"));
-    await scheduler.tick(false, Temporal.Instant.from("2026-08-13T07:00:00Z")); // 12:00
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T04:00:00Z")); // busy at 09:00
+    busy = false;
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T04:00:30Z"));
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T07:00:00Z")); // 12:00
 
     expect(sendOwner).toHaveBeenCalledTimes(1);
     expect(sendOwner).toHaveBeenCalledWith(

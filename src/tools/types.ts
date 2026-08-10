@@ -24,7 +24,6 @@ export interface ToolEnvironment {
 export interface TrustedDeliveryContext {
   kind: "owner" | "heartbeat" | "automation" | "other";
   sourceMessageId?: string;
-  authorizationEnvelopeId?: string;
   occurrenceId?: string;
   isMorning?: boolean;
 }

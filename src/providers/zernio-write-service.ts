@@ -9,7 +9,6 @@ import type {
 
 export interface TrustedWriteContext {
   sourceMessageId: string;
-  authorizationEnvelopeId?: string;
   selectedAccountId: string;
 }
 
@@ -57,10 +56,32 @@ export class ZernioWriteService {
     context: TrustedWriteContext,
     request: ZernioMutationRequest,
   ): Promise<XOperation> {
-    if (!context.authorizationEnvelopeId) {
+    const envelope = this.database.getAuthorizationForSource(
+      context.sourceMessageId,
+    );
+    if (!envelope) {
       throw new Error(
         "Current owner authorization is required for public X mutations",
       );
+    }
+    const payloadHash = hashPayload({
+      accountId: context.selectedAccountId,
+      request,
+    });
+    const begin = () =>
+      this.database.beginXOperation({
+        envelopeId: envelope.id,
+        sourceMessageId: context.sourceMessageId,
+        operation: request.operation as AuthorizationOperation,
+        payloadHash,
+        accountId: context.selectedAccountId,
+        requestJson: stableJson(request),
+      });
+    const existing = this.database.getXOperationByEnvelope(envelope.id);
+    if (existing) {
+      const operation = begin();
+      if (isTerminal(operation.status) || !isRetryableCreate(request.operation))
+        return operation;
     }
     const targetPostId =
       "providerPostId" in request ? request.providerPostId : undefined;
@@ -88,18 +109,7 @@ export class ZernioWriteService {
         "A scheduled X post must be at least one minute in the future",
       );
     }
-    const payloadHash = hashPayload({
-      accountId: context.selectedAccountId,
-      request,
-    });
-    const operation = this.database.beginXOperation({
-      envelopeId: context.authorizationEnvelopeId,
-      sourceMessageId: context.sourceMessageId,
-      operation: request.operation as AuthorizationOperation,
-      payloadHash,
-      accountId: context.selectedAccountId,
-      requestJson: stableJson(request),
-    });
+    const operation = begin();
     if (isTerminal(operation.status)) return operation;
 
     try {
@@ -138,11 +148,15 @@ export class ZernioWriteService {
           .run(updated.providerId);
       }
       if (
+        isRetryableCreate(request.operation) &&
         (updated.status === "scheduled" || updated.status === "publishing") &&
         updated.providerId
       ) {
         trackProviderPoll(this.database, updated, new Date());
-      } else if (updated.status === "publishing") {
+      } else if (
+        updated.status === "publishing" &&
+        isRetryableCreate(request.operation)
+      ) {
         return this.database.scheduleXOperationRetry(
           updated.logicalId,
           result.error ??
@@ -158,7 +172,7 @@ export class ZernioWriteService {
         status === "publishing"
           ? `Provider outcome unknown: ${safeError(error)}`
           : safeError(error);
-      if (status === "publishing") {
+      if (status === "publishing" && isRetryableCreate(request.operation)) {
         return this.database.scheduleXOperationRetry(
           operation.logicalId,
           message,
@@ -204,6 +218,17 @@ export function verifiedStatus(
 
 function isTerminal(status: XOperationStatus): boolean {
   return status !== "publishing";
+}
+
+function isRetryableCreate(
+  operation: ZernioMutationRequest["operation"],
+): boolean {
+  return (
+    operation === "draft" ||
+    operation === "publish" ||
+    operation === "schedule" ||
+    operation === "reply"
+  );
 }
 
 function hashPayload(value: unknown): string {
