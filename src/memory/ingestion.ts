@@ -1,0 +1,109 @@
+import type { ApplicationDatabase } from "../storage/application-db.ts";
+import type { SupermemoryProvider } from "./supermemory.ts";
+
+export async function ingestPendingMemory(
+  database: ApplicationDatabase,
+  memory: SupermemoryProvider,
+  input: {
+    localDate: string;
+    conversationId: string;
+    transcript: string;
+    complete: boolean;
+  },
+): Promise<void> {
+  const customId = `stan-session-${input.localDate}`;
+  const now = new Date().toISOString();
+  database.database
+    .prepare(
+      `INSERT INTO memory_documents(custom_id, local_date, conversation_id, content, complete, status, attempts, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'pending', 0, ?) ON CONFLICT(custom_id) DO UPDATE SET
+       conversation_id = excluded.conversation_id, content = excluded.content, complete = excluded.complete,
+       status = 'pending', updated_at = excluded.updated_at`,
+    )
+    .run(
+      customId,
+      input.localDate,
+      input.conversationId,
+      input.transcript,
+      input.complete ? 1 : 0,
+      now,
+    );
+  try {
+    const result = await memory.ingestSession(input);
+    database.database
+      .prepare(
+        "UPDATE memory_documents SET provider_id = ?, status = ?, attempts = attempts + 1, last_error = NULL, updated_at = ? WHERE custom_id = ?",
+      )
+      .run(result.id, result.status, new Date().toISOString(), customId);
+  } catch (error) {
+    database.database
+      .prepare(
+        `UPDATE memory_documents SET status = 'pending', attempts = attempts + 1, next_attempt_at = ?, last_error = ?, updated_at = ? WHERE custom_id = ?`,
+      )
+      .run(
+        new Date(Date.now() + 15 * 60_000).toISOString(),
+        error instanceof Error
+          ? error.message.slice(0, 500)
+          : "Memory provider failed",
+        new Date().toISOString(),
+        customId,
+      );
+  }
+}
+
+export async function reconcilePendingMemory(
+  database: ApplicationDatabase,
+  memory: SupermemoryProvider,
+): Promise<number> {
+  const rows = database.database
+    .prepare(
+      `SELECT custom_id, provider_id, status, local_date, conversation_id, content, complete FROM memory_documents
+       WHERE status <> 'done' AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY updated_at LIMIT 5`,
+    )
+    .all(new Date().toISOString()) as {
+    custom_id: string;
+    provider_id: string | null;
+    status: string;
+    local_date: string;
+    conversation_id: string;
+    content: string;
+    complete: number;
+  }[];
+  for (const row of rows) {
+    if (row.provider_id && !["pending", "failed"].includes(row.status)) {
+      try {
+        const document = (await memory.status(row.provider_id)) as {
+          status?: string;
+        };
+        const status = document.status ?? row.status;
+        database.database
+          .prepare(
+            "UPDATE memory_documents SET status = ?, next_attempt_at = ?, updated_at = ? WHERE custom_id = ?",
+          )
+          .run(
+            status,
+            status === "done"
+              ? null
+              : new Date(Date.now() + 2 * 60_000).toISOString(),
+            new Date().toISOString(),
+            row.custom_id,
+          );
+        if (status !== "failed") continue;
+      } catch {
+        database.database
+          .prepare(
+            "UPDATE memory_documents SET next_attempt_at = ? WHERE custom_id = ?",
+          )
+          .run(new Date(Date.now() + 15 * 60_000).toISOString(), row.custom_id);
+        continue;
+      }
+    }
+    await ingestPendingMemory(database, memory, {
+      localDate: row.local_date,
+      conversationId: row.conversation_id,
+      transcript: row.content,
+      complete: row.complete === 1,
+    });
+  }
+  return rows.length;
+}

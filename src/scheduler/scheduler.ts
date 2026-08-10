@@ -1,0 +1,256 @@
+import { Temporal } from "@js-temporal/polyfill";
+import type { Logger } from "pino";
+import type { StanAgentRuntime } from "../agents/runtime.ts";
+import type { StanConfig } from "../config/schema.ts";
+import type { ConfigStore } from "../config/store.ts";
+import type { DeliveryService } from "../gateway/delivery.ts";
+import type { ApplicationDatabase } from "../storage/application-db.ts";
+import type { AutomationStore } from "./automations.ts";
+import { dueHeartbeat } from "./heartbeat.ts";
+import { dailySessionId } from "./rollover.ts";
+import { proactiveDecision, recordProactiveSuggestion } from "./proactive.ts";
+
+export class Scheduler {
+  private timer: NodeJS.Timeout | undefined;
+  private activeTick: Promise<void> | undefined;
+
+  constructor(
+    private readonly database: ApplicationDatabase,
+    private readonly config: ConfigStore,
+    private readonly agent: StanAgentRuntime,
+    private readonly delivery: DeliveryService,
+    private readonly automations: AutomationStore,
+    private readonly logger: Logger,
+    private readonly maintenance?: (now: Temporal.Instant) => Promise<void>,
+    private readonly prepareHeartbeat?: () => Promise<void>,
+  ) {}
+
+  start(): void {
+    if (this.timer) return;
+    this.trigger(true);
+    this.timer = setInterval(() => this.trigger(false), 30_000);
+    this.timer.unref();
+  }
+
+  async stop(): Promise<void> {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+    await this.activeTick;
+  }
+
+  private trigger(startup: boolean): void {
+    if (this.activeTick) return;
+    this.activeTick = this.tick(startup)
+      .catch((error: unknown) => {
+        this.logger.error({ error: safeError(error) }, "Scheduler tick failed");
+      })
+      .finally(() => {
+        this.activeTick = undefined;
+      });
+  }
+
+  async tick(startup: boolean, now = Temporal.Now.instant()): Promise<void> {
+    if (this.maintenance) {
+      try {
+        await this.maintenance(now);
+      } catch (error) {
+        this.logger.error(
+          { error: safeError(error) },
+          "Scheduler maintenance failed",
+        );
+      }
+    }
+    this.database.database
+      .prepare(
+        `UPDATE heartbeat_occurrences SET status = 'failed', lease_until = NULL,
+         reason = 'Lease expired before completion could be verified', updated_at = ?
+         WHERE status IN ('leased', 'running') AND lease_until < ?`,
+      )
+      .run(now.toString(), now.toString());
+    const config = this.config.read();
+    await this.runHeartbeat(config, startup, now);
+    await this.runAutomations(now);
+  }
+
+  private async runHeartbeat(
+    config: StanConfig,
+    startup: boolean,
+    now: Temporal.Instant,
+  ): Promise<void> {
+    if (!config.heartbeat.enabled) return;
+    const completed = new Set(
+      (
+        this.database.database
+          .prepare(
+            "SELECT occurrence_id FROM heartbeat_occurrences WHERE status IN ('notified', 'silent')",
+          )
+          .all() as { occurrence_id: string }[]
+      ).map((row) => row.occurrence_id),
+    );
+    const occurrence = dueHeartbeat(now, config.heartbeat, {
+      startup,
+      completedOccurrenceIds: completed,
+    });
+    if (!occurrence) return;
+    const timestamp = now.toString();
+    const lastOwner = this.database.database
+      .prepare(
+        "SELECT received_at FROM inbound_messages ORDER BY received_at DESC LIMIT 1",
+      )
+      .get() as { received_at: string } | undefined;
+    const recentlyActive =
+      occurrence.kind === "regular" && lastOwner
+        ? now.epochMilliseconds - Date.parse(lastOwner.received_at) <
+          30 * 60_000
+        : false;
+    const status = this.agent.isBusy()
+      ? "busy"
+      : recentlyActive
+        ? "suppressed"
+        : "leased";
+    const inserted = this.database.database
+      .prepare(
+        `INSERT OR IGNORE INTO heartbeat_occurrences(occurrence_id, local_date, scheduled_for, kind, status, lease_until, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        occurrence.id,
+        occurrence.anchorDate,
+        occurrence.scheduledFor,
+        occurrence.kind,
+        status,
+        status === "leased"
+          ? new Date(now.epochMilliseconds + 10 * 60_000).toISOString()
+          : null,
+        timestamp,
+        timestamp,
+      );
+    if (inserted.changes === 0 || status !== "leased") return;
+    this.database.database
+      .prepare(
+        "UPDATE heartbeat_occurrences SET status = 'running', updated_at = ? WHERE occurrence_id = ?",
+      )
+      .run(timestamp, occurrence.id);
+    try {
+      if (this.prepareHeartbeat) {
+        try {
+          await this.prepareHeartbeat();
+        } catch (error) {
+          this.logger.warn(
+            { occurrenceId: occurrence.id, error: safeError(error) },
+            "Optional heartbeat research preparation failed",
+          );
+        }
+      }
+      const reply = await this.agent.deliver(dailySessionId(now), {
+        kind: "signal",
+        type: "heartbeat",
+        body:
+          occurrence.kind === "morning"
+            ? "Run the morning heartbeat. Always finish with heartbeat_respond and one conversational message."
+            : "Run the regular heartbeat. Finish with heartbeat_respond; stay silent unless one interruption is worthwhile.",
+        attributes: {
+          occurrenceId: occurrence.id,
+          kind: occurrence.kind,
+          scheduledFor: occurrence.scheduledFor,
+        },
+      });
+      const row = this.database.database
+        .prepare(
+          "SELECT status, notify, message FROM heartbeat_occurrences WHERE occurrence_id = ?",
+        )
+        .get(occurrence.id) as {
+        status: string;
+        notify: number | null;
+        message: string | null;
+      };
+      const message =
+        row.status === "ready"
+          ? row.message
+          : occurrence.kind === "morning"
+            ? reply.trim()
+            : null;
+      if (message) {
+        if (occurrence.kind === "regular") {
+          const suppression = proactiveDecision(
+            this.database,
+            message,
+            occurrence.anchorDate,
+          );
+          if (suppression) {
+            this.database.database
+              .prepare(
+                "UPDATE heartbeat_occurrences SET status = 'silent', notify = 0, reason = ?, lease_until = NULL, updated_at = ? WHERE occurrence_id = ?",
+              )
+              .run(suppression, new Date().toISOString(), occurrence.id);
+            return;
+          }
+        }
+        await this.delivery.sendOwner(message, `heartbeat:${occurrence.id}`);
+        this.database.database
+          .prepare(
+            "UPDATE heartbeat_occurrences SET status = 'notified', notify = 1, message = ?, lease_until = NULL, updated_at = ? WHERE occurrence_id = ?",
+          )
+          .run(message, new Date().toISOString(), occurrence.id);
+        if (occurrence.kind === "regular") {
+          recordProactiveSuggestion(
+            this.database,
+            message,
+            new Date(now.epochMilliseconds),
+          );
+        }
+      } else if (row.status !== "silent") {
+        throw new Error("Heartbeat did not produce a structured response");
+      }
+    } catch (error) {
+      this.database.database
+        .prepare(
+          "UPDATE heartbeat_occurrences SET status = 'failed', reason = ?, lease_until = NULL, updated_at = ? WHERE occurrence_id = ?",
+        )
+        .run(safeError(error), new Date().toISOString(), occurrence.id);
+      this.logger.error(
+        { occurrenceId: occurrence.id, error: safeError(error) },
+        "Heartbeat failed",
+      );
+    }
+  }
+
+  private async runAutomations(now: Temporal.Instant): Promise<void> {
+    for (const run of this.automations.claimDue(
+      new Date(now.epochMilliseconds),
+    )) {
+      try {
+        const reply = await this.agent.deliver(dailySessionId(now), {
+          kind: "signal",
+          type: "automation",
+          body: run.automation.instruction,
+          attributes: {
+            occurrenceId: run.occurrenceId,
+            automationId: run.automation.id,
+            scheduledFor: run.scheduledFor,
+          },
+        });
+        if (run.automation.deliveryMode === "owner_whatsapp")
+          await this.delivery.sendOwner(
+            reply,
+            `automation:${run.occurrenceId}`,
+          );
+        this.automations.finishRun(run.occurrenceId, {
+          status: "completed",
+          output: reply.slice(0, 12_000),
+        });
+      } catch (error) {
+        this.automations.finishRun(run.occurrenceId, {
+          status: "failed",
+          error: safeError(error),
+        });
+      }
+    }
+  }
+}
+
+function safeError(error: unknown): string {
+  return error instanceof Error
+    ? error.message.slice(0, 500)
+    : "Unknown scheduler failure";
+}

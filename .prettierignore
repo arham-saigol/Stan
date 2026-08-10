@@ -1,0 +1,8 @@
+node_modules
+dist
+.flue
+coverage
+plans
+.agents
+AGENTS.md
+package-lock.json
