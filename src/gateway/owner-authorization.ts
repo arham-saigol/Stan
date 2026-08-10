@@ -10,6 +10,11 @@ export interface DerivedAuthorization {
   authorizedScheduledFor?: string;
 }
 
+export interface DerivedAutomationAuthorization {
+  operation: AutomationAuthorizationOperation;
+  payloadJson: string;
+}
+
 const prefixes =
   /^(?:(?:(?:yes|okay|ok|please|stan)[,.!]?|(?:can|could|would)\s+you|go\s+ahead(?:\s+and)?)\s+)*/i;
 const command =
@@ -99,25 +104,88 @@ export function deriveAuthorization(
     : undefined;
 }
 
-export function deriveAutomationAuthorizationOperation(
+export function deriveAutomationAuthorization(
   text: string,
-): AutomationAuthorizationOperation | undefined {
+): DerivedAutomationAuthorization | undefined {
   const normalized = text.trim().replace(prefixes, "");
-  if (
-    /^(?:create|add|schedule|set\s+up)\b.*\b(?:automation|reminder|recurring\s+job)\b/i.test(
+  const create =
+    /^(?:create|add|schedule|set\s+up)\s+automation\s*:\s*(\{.*\})$/is.exec(
       normalized,
-    )
-  )
-    return "create";
-  if (
-    /^(?:pause|disable|enable|resume)\b.*\b(?:automation|reminder|job)\b/i.test(
+    );
+  if (create) {
+    try {
+      return {
+        operation: "create",
+        payloadJson: automationMutationPayload(
+          "create",
+          JSON.parse(create[1]!) as Record<string, unknown>,
+        ),
+      };
+    } catch {
+      return undefined;
+    }
+  }
+  const enabled =
+    /^(pause|disable|enable|resume)\s+automation\s+([A-Za-z0-9_-]{1,200})$/i.exec(
       normalized,
-    )
-  )
-    return "set_enabled";
-  if (/^(?:delete|remove)\b.*\b(?:automation|reminder|job)\b/i.test(normalized))
-    return "delete";
+    );
+  if (enabled) {
+    return {
+      operation: "set_enabled",
+      payloadJson: automationMutationPayload("set_enabled", {
+        id: enabled[2]!,
+        enabled: /^(?:enable|resume)$/i.test(enabled[1]!),
+      }),
+    };
+  }
+  const deletion =
+    /^(?:delete|remove)\s+automation\s+([A-Za-z0-9_-]{1,200})$/i.exec(
+      normalized,
+    );
+  if (deletion) {
+    return {
+      operation: "delete",
+      payloadJson: automationMutationPayload("delete", { id: deletion[1]! }),
+    };
+  }
   return undefined;
+}
+
+export function automationMutationPayload(
+  operation: AutomationAuthorizationOperation,
+  input: Record<string, unknown>,
+): string {
+  if (operation === "create") {
+    const scheduleType = input.scheduleType;
+    if (
+      typeof input.name !== "string" ||
+      (scheduleType !== "once" && scheduleType !== "cron") ||
+      typeof input.instruction !== "string" ||
+      (input.deliveryMode !== "silent" &&
+        input.deliveryMode !== "owner_whatsapp")
+    )
+      throw new Error("Automation confirmation payload is invalid");
+    const scheduleValue = scheduleType === "once" ? input.at : input.expression;
+    if (typeof scheduleValue !== "string")
+      throw new Error("Automation schedule confirmation is incomplete");
+    return JSON.stringify({
+      name: input.name,
+      scheduleType,
+      ...(scheduleType === "once"
+        ? { at: scheduleValue }
+        : { expression: scheduleValue }),
+      instruction: input.instruction,
+      deliveryMode: input.deliveryMode,
+    });
+  }
+  if (typeof input.id !== "string")
+    throw new Error("Automation target confirmation is invalid");
+  if (operation === "set_enabled") {
+    if (typeof input.enabled !== "boolean")
+      throw new Error("Automation state confirmation is invalid");
+    return JSON.stringify({ id: input.id, enabled: input.enabled });
+  }
+  return JSON.stringify({ id: input.id });
 }
 
 function contentOperation(operation: AuthorizationOperation): boolean {

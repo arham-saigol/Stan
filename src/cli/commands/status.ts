@@ -37,6 +37,7 @@ export async function statusCommand(root: string): Promise<void> {
         .prepare(
           `SELECT
              (SELECT COUNT(*) FROM inbound_messages WHERE state = 'unknown') +
+             (SELECT COUNT(*) FROM heartbeat_occurrences WHERE status = 'failed' AND attempts >= 3) +
              (SELECT COUNT(*) FROM automation_runs WHERE status IN ('unknown', 'notification_pending')) +
              (SELECT COUNT(*) FROM memory_documents WHERE status = 'failed') +
              (SELECT COUNT(*) FROM x_operations x WHERE status = 'publishing' AND next_retry_at IS NULL

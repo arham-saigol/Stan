@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveAuthorization,
   deriveAuthorizationOperation,
-  deriveAutomationAuthorizationOperation,
+  deriveAutomationAuthorization,
 } from "../src/gateway/owner-authorization.ts";
 
 describe("owner X authorization classification", () => {
@@ -85,15 +85,22 @@ describe("owner X authorization classification", () => {
 
   it("requires an explicit automation mutation verb and object", () => {
     expect(
-      deriveAutomationAuthorizationOperation(
-        "Please schedule a research reminder automation",
+      deriveAutomationAuthorization(
+        'Please create automation: {"name":"research","scheduleType":"once","at":"2099-08-13T04:00:00Z","instruction":"Research the topic","deliveryMode":"owner_whatsapp"}',
       ),
-    ).toBe("create");
+    ).toEqual({
+      operation: "create",
+      payloadJson:
+        '{"name":"research","scheduleType":"once","at":"2099-08-13T04:00:00Z","instruction":"Research the topic","deliveryMode":"owner_whatsapp"}',
+    });
     expect(
-      deriveAutomationAuthorizationOperation("Delete the daily automation"),
-    ).toBe("delete");
+      deriveAutomationAuthorization("Delete automation automation-1"),
+    ).toEqual({
+      operation: "delete",
+      payloadJson: '{"id":"automation-1"}',
+    });
     expect(
-      deriveAutomationAuthorizationOperation("Research our automation rate"),
+      deriveAutomationAuthorization("Research our automation rate"),
     ).toBeUndefined();
   });
 });

@@ -39,8 +39,13 @@ export class AutomationStore {
   consumeAuthorization(
     sourceMessageId: string,
     operation: AutomationAuthorizationOperation,
+    payloadJson: string,
   ): void {
-    this.application.consumeAutomationAuthorization(sourceMessageId, operation);
+    this.application.consumeAutomationAuthorization(
+      sourceMessageId,
+      operation,
+      payloadJson,
+    );
   }
 
   create(input: {

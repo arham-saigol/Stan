@@ -6,7 +6,7 @@ import {
 } from "../storage/application-db.ts";
 import {
   deriveAuthorization,
-  deriveAutomationAuthorizationOperation,
+  deriveAutomationAuthorization,
 } from "./owner-authorization.ts";
 
 export interface InboundMessage {
@@ -172,13 +172,12 @@ export class OwnerIngress {
           });
         }
       }
-      const automationOperation = deriveAutomationAuthorizationOperation(
-        message.text,
-      );
+      const automationOperation = deriveAutomationAuthorization(message.text);
       if (automationOperation) {
         this.database.createAutomationAuthorization(
           message.id,
-          automationOperation,
+          automationOperation.operation,
+          automationOperation.payloadJson,
           new Date(message.receivedAt),
         );
       }

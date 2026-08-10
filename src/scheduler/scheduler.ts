@@ -131,12 +131,14 @@ export class Scheduler {
       const reclaimed = this.database.database
         .prepare(
           `UPDATE heartbeat_occurrences SET status = 'leased', lease_until = ?, updated_at = ?
-           WHERE occurrence_id = ? AND status IN ('busy', 'failed')`,
+           WHERE occurrence_id = ? AND status IN ('busy', 'failed') AND notify IS NOT 1
+             AND attempts < 3 AND (next_retry_at IS NULL OR next_retry_at <= ?)`,
         )
         .run(
           new Date(now.epochMilliseconds + 10 * 60_000).toISOString(),
           timestamp,
           occurrence.id,
+          timestamp,
         );
       if (reclaimed.changes === 0) return;
     }
@@ -202,7 +204,8 @@ export class Scheduler {
         }
         this.database.database
           .prepare(
-            "UPDATE heartbeat_occurrences SET status = 'ready', notify = 1, message = ?, updated_at = ? WHERE occurrence_id = ?",
+            `UPDATE heartbeat_occurrences SET status = 'ready', notify = 1, message = ?,
+             attempts = 0, next_retry_at = NULL, updated_at = ? WHERE occurrence_id = ?`,
           )
           .run(message, new Date().toISOString(), occurrence.id);
         await this.delivery.sendOwner(message, `heartbeat:${occurrence.id}`);
@@ -222,11 +225,28 @@ export class Scheduler {
         throw new Error("Heartbeat did not produce a structured response");
       }
     } catch (error) {
+      const failed = this.database.database
+        .prepare(
+          "SELECT attempts FROM heartbeat_occurrences WHERE occurrence_id = ?",
+        )
+        .get(occurrence.id) as { attempts: number };
+      const attempts = failed.attempts + 1;
       this.database.database
         .prepare(
-          "UPDATE heartbeat_occurrences SET status = 'failed', reason = ?, lease_until = NULL, updated_at = ? WHERE occurrence_id = ?",
+          `UPDATE heartbeat_occurrences SET status = 'failed', attempts = ?, reason = ?, lease_until = NULL,
+           next_retry_at = ?, updated_at = ? WHERE occurrence_id = ?`,
         )
-        .run(safeError(error), new Date().toISOString(), occurrence.id);
+        .run(
+          attempts,
+          safeError(error),
+          attempts >= 3
+            ? null
+            : new Date(
+                now.epochMilliseconds + 60_000 * 2 ** (attempts - 1),
+              ).toISOString(),
+          now.toString(),
+          occurrence.id,
+        );
       this.logger.error(
         { occurrenceId: occurrence.id, error: safeError(error) },
         "Heartbeat failed",
@@ -239,15 +259,17 @@ export class Scheduler {
   ): Promise<void> {
     const pending = this.database.database
       .prepare(
-        `SELECT occurrence_id, local_date, kind, message FROM heartbeat_occurrences
+        `SELECT occurrence_id, local_date, kind, message, attempts FROM heartbeat_occurrences
          WHERE status IN ('failed', 'ready') AND notify = 1 AND message IS NOT NULL
+           AND attempts < 3 AND (next_retry_at IS NULL OR next_retry_at <= ?)
          ORDER BY updated_at LIMIT 5`,
       )
-      .all() as {
+      .all(now.toString()) as {
       occurrence_id: string;
       local_date: string;
       kind: "morning" | "regular";
       message: string;
+      attempts: number;
     }[];
     for (const occurrence of pending) {
       try {
@@ -268,11 +290,23 @@ export class Scheduler {
           );
         }
       } catch (error) {
+        const attempts = occurrence.attempts + 1;
         this.database.database
           .prepare(
-            "UPDATE heartbeat_occurrences SET reason = ?, updated_at = ? WHERE occurrence_id = ?",
+            `UPDATE heartbeat_occurrences SET status = 'failed', attempts = ?, reason = ?,
+             next_retry_at = ?, updated_at = ? WHERE occurrence_id = ?`,
           )
-          .run(safeError(error), now.toString(), occurrence.occurrence_id);
+          .run(
+            attempts,
+            safeError(error),
+            attempts >= 3
+              ? null
+              : new Date(
+                  now.epochMilliseconds + 60_000 * 2 ** (attempts - 1),
+                ).toISOString(),
+            now.toString(),
+            occurrence.occurrence_id,
+          );
       }
     }
   }

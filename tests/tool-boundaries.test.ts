@@ -5,6 +5,7 @@ import { heartbeatTools } from "../src/tools/heartbeat.ts";
 import { workspaceTools } from "../src/tools/workspace.ts";
 import { automationTools } from "../src/tools/automations.ts";
 import { AutomationStore } from "../src/scheduler/automations.ts";
+import { automationMutationPayload } from "../src/gateway/owner-authorization.ts";
 
 type Run = (context: { data: Record<string, unknown> }) => Promise<unknown>;
 
@@ -82,7 +83,11 @@ describe("trusted tool boundaries", () => {
     };
 
     await expect((tool.run as Run)(input)).rejects.toThrow(/authorization/i);
-    database.createAutomationAuthorization("owner-automation", "create");
+    database.createAutomationAuthorization(
+      "owner-automation",
+      "create",
+      automationMutationPayload("create", input.data),
+    );
     await expect((tool.run as Run)(input)).resolves.toMatchObject({
       output: { name: "explicit reminder" },
     });

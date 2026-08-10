@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS authorization_envelopes (
 CREATE TABLE IF NOT EXISTS automation_authorizations (
   source_message_id TEXT PRIMARY KEY REFERENCES inbound_messages(provider_message_id),
   operation TEXT NOT NULL CHECK (operation IN ('create', 'set_enabled', 'delete')),
+  payload_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
   consumed_at TEXT
 ) STRICT;
@@ -140,6 +141,8 @@ CREATE TABLE IF NOT EXISTS heartbeat_occurrences (
   notify INTEGER CHECK (notify IN (0, 1)),
   message TEXT,
   reason TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_retry_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 ) STRICT;
@@ -280,6 +283,24 @@ export class ApplicationDatabase {
         "scheduled_publications",
         "poll_count",
         "INTEGER NOT NULL DEFAULT 0",
+      );
+      addColumnIfMissing(
+        this.database,
+        "automation_authorizations",
+        "payload_json",
+        "TEXT",
+      );
+      addColumnIfMissing(
+        this.database,
+        "heartbeat_occurrences",
+        "attempts",
+        "INTEGER NOT NULL DEFAULT 0",
+      );
+      addColumnIfMissing(
+        this.database,
+        "heartbeat_occurrences",
+        "next_retry_at",
+        "TEXT",
       );
       addColumnIfMissing(
         this.database,
@@ -609,30 +630,34 @@ export class ApplicationDatabase {
   createAutomationAuthorization(
     sourceMessageId: string,
     operation: AutomationAuthorizationOperation,
+    payloadJson: string,
     now = new Date(),
   ): void {
     this.database
       .prepare(
-        `INSERT OR IGNORE INTO automation_authorizations(source_message_id, operation, created_at)
-         VALUES (?, ?, ?)`,
+        `INSERT OR IGNORE INTO automation_authorizations(source_message_id, operation, payload_json, created_at)
+         VALUES (?, ?, ?, ?)`,
       )
-      .run(sourceMessageId, operation, now.toISOString());
+      .run(sourceMessageId, operation, payloadJson, now.toISOString());
   }
 
   consumeAutomationAuthorization(
     sourceMessageId: string,
     operation: AutomationAuthorizationOperation,
+    payloadJson: string,
   ): void {
     const now = new Date();
     const result = this.database
       .prepare(
         `UPDATE automation_authorizations SET consumed_at = ?
-         WHERE source_message_id = ? AND operation = ? AND consumed_at IS NULL AND created_at > ?`,
+         WHERE source_message_id = ? AND operation = ? AND payload_json = ?
+           AND consumed_at IS NULL AND created_at > ?`,
       )
       .run(
         now.toISOString(),
         sourceMessageId,
         operation,
+        payloadJson,
         new Date(now.getTime() - 15 * 60_000).toISOString(),
       );
     if (result.changes !== 1) {

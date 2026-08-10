@@ -136,4 +136,43 @@ describe("heartbeat execution", () => {
     ).toEqual({ status: "notified" });
     database.close();
   });
+
+  it("bounds permanently failing morning heartbeat generation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-heartbeat-failure-"));
+    const config = new ConfigStore(root);
+    await config.write(createDefaultConfig({ ownerPhone: "+923001234567" }));
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const deliver = vi.fn(async () => {
+      throw new Error("model unavailable");
+    });
+    const scheduler = new Scheduler(
+      database,
+      config,
+      { isBusy: () => false, deliver } as unknown as StanAgentRuntime,
+      { sendOwner: vi.fn() } as unknown as DeliveryService,
+      new AutomationStore(database),
+      pino({ level: "silent" }),
+    );
+
+    for (const instant of [
+      "2026-08-13T04:00:00Z",
+      "2026-08-13T04:00:30Z",
+      "2026-08-13T04:01:00Z",
+      "2026-08-13T04:03:00Z",
+      "2026-08-13T04:04:00Z",
+    ]) {
+      await scheduler.tick(Temporal.Instant.from(instant));
+    }
+
+    expect(deliver).toHaveBeenCalledTimes(3);
+    expect(
+      database.database
+        .prepare(
+          "SELECT status, attempts, next_retry_at FROM heartbeat_occurrences",
+        )
+        .get(),
+    ).toEqual({ status: "failed", attempts: 3, next_retry_at: null });
+    database.close();
+  });
 });
