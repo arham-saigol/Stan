@@ -47,6 +47,8 @@ export interface XOperation {
   requestJson: string;
   retryCount: number;
   nextRetryAt: string | null;
+  notificationMessage: string | null;
+  notificationAttempts: number;
   providerId: string | null;
   status: XOperationStatus;
   publicId: string | null;
@@ -135,6 +137,8 @@ CREATE TABLE IF NOT EXISTS x_operations (
   request_json TEXT NOT NULL,
   retry_count INTEGER NOT NULL DEFAULT 0,
   next_retry_at TEXT,
+  notification_message TEXT,
+  notification_attempts INTEGER NOT NULL DEFAULT 0,
   provider_id TEXT,
   status TEXT NOT NULL CHECK (status IN ('draft', 'scheduled', 'publishing', 'published', 'partial', 'failed', 'cancelled')),
   public_id TEXT,
@@ -305,6 +309,18 @@ export class ApplicationDatabase {
         this.database,
         "scheduled_publications",
         "poll_count",
+        "INTEGER NOT NULL DEFAULT 0",
+      );
+      addColumnIfMissing(
+        this.database,
+        "x_operations",
+        "notification_message",
+        "TEXT",
+      );
+      addColumnIfMissing(
+        this.database,
+        "x_operations",
+        "notification_attempts",
         "INTEGER NOT NULL DEFAULT 0",
       );
       addColumnIfMissing(
@@ -963,6 +979,8 @@ function mapXOperation(row: Record<string, string | null>): XOperation {
     requestJson: row.request_json!,
     retryCount: Number(row.retry_count),
     nextRetryAt: row.next_retry_at ?? null,
+    notificationMessage: row.notification_message ?? null,
+    notificationAttempts: Number(row.notification_attempts),
     providerId: row.provider_id ?? null,
     status: row.status as XOperationStatus,
     publicId: row.public_id ?? null,

@@ -19,7 +19,7 @@ export async function reconcileScheduledPublications(
   const rows = database.database
     .prepare(
       `SELECT s.logical_operation_id, s.provider_id, s.last_status, s.notified_status, s.poll_count,
-              s.notification_message, s.notification_attempts, x.operation
+              s.notification_message, s.notification_attempts, x.operation, x.request_json
        FROM scheduled_publications s JOIN x_operations x ON x.logical_id = s.logical_operation_id
        WHERE s.next_poll_at <= ? AND s.notification_attempts < 3
        ORDER BY s.next_poll_at LIMIT 10`,
@@ -33,6 +33,7 @@ export async function reconcileScheduledPublications(
     notification_message: string | null;
     notification_attempts: number;
     operation: string;
+    request_json: string;
   }[];
   for (const row of rows) {
     if (row.notification_message) {
@@ -102,19 +103,34 @@ export async function reconcileScheduledPublications(
     );
     const incompletePublished =
       observed === "partial" && post.status === "published";
-    const pollCount = incompletePublished ? row.poll_count + 1 : 0;
-    const waitingForPublicIdentity = incompletePublished && pollCount < 3;
-    const status = waitingForPublicIdentity ? "publishing" : observed;
+    const expectedEditContent = editContent(row.operation, row.request_json);
+    const editMismatch =
+      row.operation === "edit" && post.content !== expectedEditContent;
+    const unsettled =
+      incompletePublished ||
+      editMismatch ||
+      observed === "publishing" ||
+      observed === "scheduled";
+    const pollCount = unsettled ? row.poll_count + 1 : 0;
+    const exhausted = unsettled && pollCount >= 3;
+    const status: XOperationStatus = exhausted
+      ? "partial"
+      : incompletePublished || editMismatch
+        ? "publishing"
+        : observed;
+    const error = exhausted
+      ? editMismatch
+        ? "Zernio did not expose the authorized edited content after bounded polling"
+        : "Zernio did not reach a verifiable terminal state after bounded polling"
+      : (target?.errorMessage ?? null);
     const updated = database.updateXOperation(row.logical_operation_id, {
       status,
       providerId: row.provider_id,
       ...(target?.platformPostId ? { publicId: target.platformPostId } : {}),
       ...(target?.platformPostUrl ? { publicUrl: target.platformPostUrl } : {}),
       ...(post.scheduledFor ? { scheduledFor: post.scheduledFor } : {}),
-      error: target?.errorMessage ?? null,
+      error,
     });
-    const material =
-      status !== row.last_status && isTerminal(row.operation, status);
     if (isTerminal(row.operation, status)) {
       const message = renderStatus(
         row.operation,
@@ -148,7 +164,7 @@ export async function reconcileScheduledPublications(
         )
         .run(
           status,
-          material ? status : row.notified_status,
+          row.notified_status,
           pollCount,
           new Date(now.getTime() + 5 * 60_000).toISOString(),
           row.logical_operation_id,
@@ -156,6 +172,19 @@ export async function reconcileScheduledPublications(
     }
   }
   return rows.length;
+}
+
+function editContent(
+  operation: string,
+  requestJson: string,
+): string | undefined {
+  if (operation !== "edit") return undefined;
+  try {
+    const request = JSON.parse(requestJson) as { content?: unknown };
+    return typeof request.content === "string" ? request.content : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function queueTerminalNotification(

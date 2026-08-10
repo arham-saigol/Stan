@@ -9,6 +9,7 @@ import { atomicWritePrivate, statePaths } from "../../state.ts";
 
 const execFileAsync = promisify(execFile);
 const CONTROL_PORT = 43127;
+const DRAIN_TIMEOUT_MS = 60 * 60_000;
 
 export interface DaemonStatus {
   status: string;
@@ -61,11 +62,12 @@ export async function stopService(root: string): Promise<boolean> {
     headers: { authorization: `Bearer ${credentials.controlToken}` },
     signal: AbortSignal.timeout(3000),
   });
-  for (let attempt = 0; attempt < 280; attempt += 1) {
+  const deadline = Date.now() + DRAIN_TIMEOUT_MS;
+  while (Date.now() < deadline) {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
     if (!(await getDaemonStatus(root))) return true;
   }
-  throw new Error("Stan did not stop at a safe boundary within 70 seconds");
+  throw new Error("Stan did not stop at a safe boundary within one hour");
 }
 
 export async function installAutostart(root: string): Promise<void> {

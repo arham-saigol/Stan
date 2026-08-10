@@ -28,12 +28,16 @@ export async function reconcilePendingXOperations(
   for (const row of rows) {
     const operation = database.getXOperation(row.logical_id);
     if (!operation) continue;
+    if (operation.notificationMessage) {
+      await deliverQueuedResult(database, delivery, operation, now);
+      continue;
+    }
     if (operation.status !== "publishing") {
-      await deliverTerminalResult(database, delivery, operation);
+      await deliverTerminalResult(database, delivery, operation, now);
       continue;
     }
     if (operation.retryCount >= 3) {
-      await deliverUnknownResult(database, delivery, operation);
+      await deliverUnknownResult(database, delivery, operation, now);
       continue;
     }
     if (now.getTime() - Date.parse(operation.createdAt) >= 5 * 60_000) {
@@ -48,6 +52,7 @@ export async function reconcilePendingXOperations(
         database,
         delivery,
         database.getXOperation(operation.logicalId)!,
+        now,
       );
       continue;
     }
@@ -83,12 +88,14 @@ export async function reconcilePendingXOperations(
       return applied;
     });
     if (
-      (updated.status === "publishing" || updated.status === "scheduled") &&
+      (updated.status === "publishing" ||
+        updated.status === "scheduled" ||
+        updated.status === "partial") &&
       updated.providerId
     ) {
       trackProviderPoll(database, updated, now, updated.status === "scheduled");
       if (updated.status === "scheduled") {
-        await deliverTerminalResult(database, delivery, updated);
+        await deliverTerminalResult(database, delivery, updated, now);
       }
       continue;
     }
@@ -104,7 +111,7 @@ export async function reconcilePendingXOperations(
       }
       continue;
     }
-    await deliverTerminalResult(database, delivery, updated);
+    await deliverTerminalResult(database, delivery, updated, now);
   }
   return rows.length;
 }
@@ -118,42 +125,92 @@ async function queueAndDeliverUnknownResult(
   database.database
     .prepare("UPDATE x_operations SET next_retry_at = ? WHERE logical_id = ?")
     .run(now.toISOString(), operation.logicalId);
-  await deliverUnknownResult(database, delivery, operation);
+  await deliverUnknownResult(database, delivery, operation, now);
 }
 
 async function deliverUnknownResult(
   database: ApplicationDatabase,
   delivery: DeliveryService,
   operation: XOperation,
+  now: Date,
 ): Promise<void> {
   const message = operation.error?.includes("deduplication window expired")
     ? `I did not retry the uncertain X ${operation.operation} because Zernio's create-deduplication window had expired. Its outcome is still unknown; check Zernio/X before trying it again.`
     : `I could not verify the ${operation.operation} request after bounded retries. Its outcome is still unknown; check Zernio/X before trying it again.`;
-  await delivery.sendOwner(
-    message,
-    `x-operation:${operation.logicalId}:unknown`,
-  );
-  database.database
-    .prepare(
-      "UPDATE x_operations SET next_retry_at = NULL WHERE logical_id = ?",
-    )
-    .run(operation.logicalId);
+  await queueAndDeliverResult(database, delivery, operation, message, now);
 }
 
 async function deliverTerminalResult(
   database: ApplicationDatabase,
   delivery: DeliveryService,
   operation: XOperation,
+  now: Date,
 ): Promise<void> {
-  await delivery.sendOwner(
+  await queueAndDeliverResult(
+    database,
+    delivery,
+    operation,
     renderResult(operation),
-    `x-operation:${operation.logicalId}:${operation.status}`,
+    now,
   );
+}
+
+async function queueAndDeliverResult(
+  database: ApplicationDatabase,
+  delivery: DeliveryService,
+  operation: XOperation,
+  message: string,
+  now: Date,
+): Promise<void> {
   database.database
     .prepare(
-      "UPDATE x_operations SET next_retry_at = NULL WHERE logical_id = ?",
+      `UPDATE x_operations SET notification_message = ?, notification_attempts = 0,
+       next_retry_at = ?, updated_at = ? WHERE logical_id = ?`,
     )
-    .run(operation.logicalId);
+    .run(message, now.toISOString(), now.toISOString(), operation.logicalId);
+  await deliverQueuedResult(
+    database,
+    delivery,
+    { ...operation, notificationMessage: message, notificationAttempts: 0 },
+    now,
+  );
+}
+
+async function deliverQueuedResult(
+  database: ApplicationDatabase,
+  delivery: DeliveryService,
+  operation: XOperation,
+  now: Date,
+): Promise<void> {
+  try {
+    await delivery.sendOwner(
+      operation.notificationMessage!,
+      `x-operation:${operation.logicalId}:${operation.status === "publishing" ? "unknown" : operation.status}`,
+    );
+    database.database
+      .prepare(
+        `UPDATE x_operations SET next_retry_at = NULL, notification_message = NULL,
+         notification_attempts = 0 WHERE logical_id = ?`,
+      )
+      .run(operation.logicalId);
+  } catch {
+    const attempts = operation.notificationAttempts + 1;
+    database.database
+      .prepare(
+        `UPDATE x_operations SET notification_attempts = ?, next_retry_at = ?, updated_at = ?
+         WHERE logical_id = ?`,
+      )
+      .run(
+        attempts,
+        attempts >= 3
+          ? null
+          : new Date(
+              now.getTime() + 60_000 * 2 ** (attempts - 1),
+            ).toISOString(),
+        now.toISOString(),
+        operation.logicalId,
+      );
+  }
 }
 
 function applyResult(
