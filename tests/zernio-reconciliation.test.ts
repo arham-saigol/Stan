@@ -476,7 +476,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.close();
   });
 
-  it("verifies authorized edit content before reporting recovery success", async () => {
+  it("reconciles an incomplete edit result before reporting success", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
     database.claimInbound({
@@ -495,9 +495,10 @@ describe("ambiguous Zernio operation reconciliation", () => {
     let poll = 0;
     const provider = {
       verifyPostAccount: vi.fn(async () => true),
-      mutate: vi.fn(async () => {
-        throw new Error("ambiguous edit outcome");
-      }),
+      mutate: vi.fn(async () => ({
+        status: "published" as const,
+        providerId: "z-1",
+      })),
       getPost: vi.fn(async () => ({
         status: "published" as const,
         content: ++poll === 1 ? "old content" : "new content",
@@ -543,59 +544,63 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.close();
   });
 
-  it("bounds provider states that never settle", async () => {
-    const database = new ApplicationDatabase(":memory:");
-    database.migrate();
-    database.claimInbound({
-      id: "owner-1",
-      senderIdentity: "923001234567@s.whatsapp.net",
-      body: "post it",
-      receivedAt: "2026-08-13T00:00:00Z",
-    });
-    database.createAuthorization({
-      sourceMessageId: "owner-1",
-      operation: "publish",
-      authorizedContent: "hello",
-      now: new Date("2026-08-13T00:00:00Z"),
-    });
-    const provider = {
-      mutate: vi.fn(async () => ({
-        status: "publishing" as const,
-        providerId: "z-1",
-      })),
-      getPost: vi.fn(async () => ({
-        status: "publishing" as const,
-        platforms: [
-          { platform: "twitter" as const, status: "publishing" as const },
-        ],
-      })),
-    };
-    const operation = await new ZernioWriteService(database, provider).execute(
-      { sourceMessageId: "owner-1", selectedAccountId: "account-1" },
-      { operation: "publish", content: "hello" },
-    );
-    setOperationCreatedAt(database, operation.logicalId);
-    const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
-
-    for (const time of [
-      "2026-08-13T00:02:00Z",
-      "2026-08-13T00:07:00Z",
-      "2026-08-13T00:12:00Z",
-    ])
-      await reconcileScheduledPublications(
+  it.each(["publishing", "draft"] as const)(
+    "bounds provider state %s when it never settles",
+    async (providerStatus) => {
+      const database = new ApplicationDatabase(":memory:");
+      database.migrate();
+      database.claimInbound({
+        id: "owner-1",
+        senderIdentity: "923001234567@s.whatsapp.net",
+        body: "post it",
+        receivedAt: "2026-08-13T00:00:00Z",
+      });
+      database.createAuthorization({
+        sourceMessageId: "owner-1",
+        operation: "publish",
+        authorizedContent: "hello",
+        now: new Date("2026-08-13T00:00:00Z"),
+      });
+      const provider = {
+        mutate: vi.fn(async () => ({
+          status: "publishing" as const,
+          providerId: "z-1",
+        })),
+        getPost: vi.fn(async () => ({
+          status: providerStatus,
+          platforms: [{ platform: "twitter" as const, status: providerStatus }],
+        })),
+      };
+      const operation = await new ZernioWriteService(
         database,
         provider,
-        { sendOwner } as unknown as DeliveryService,
-        new Date(time),
+      ).execute(
+        { sourceMessageId: "owner-1", selectedAccountId: "account-1" },
+        { operation: "publish", content: "hello" },
       );
+      setOperationCreatedAt(database, operation.logicalId);
+      const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
 
-    expect(provider.getPost).toHaveBeenCalledTimes(3);
-    const resolved = database.getXOperation(operation.logicalId)!;
-    expect(resolved.status).toBe("partial");
-    expect(resolved.error).toContain("bounded polling");
-    expect(sendOwner).toHaveBeenCalledOnce();
-    database.close();
-  });
+      for (const time of [
+        "2026-08-13T00:02:00Z",
+        "2026-08-13T00:07:00Z",
+        "2026-08-13T00:12:00Z",
+      ])
+        await reconcileScheduledPublications(
+          database,
+          provider,
+          { sendOwner } as unknown as DeliveryService,
+          new Date(time),
+        );
+
+      expect(provider.getPost).toHaveBeenCalledTimes(3);
+      const resolved = database.getXOperation(operation.logicalId)!;
+      expect(resolved.status).toBe("partial");
+      expect(resolved.error).toContain("bounded polling");
+      expect(sendOwner).toHaveBeenCalledOnce();
+      database.close();
+    },
+  );
 
   it("does not treat a scheduled-publication notification outage as provider failure", async () => {
     const database = new ApplicationDatabase(":memory:");

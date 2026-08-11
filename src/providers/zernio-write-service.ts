@@ -203,7 +203,8 @@ export class ZernioWriteService {
             "Zernio accepted the request but returned no provider post ID",
         );
       } else if (
-        updated.status === "publishing" &&
+        (updated.status === "publishing" ||
+          (request.operation === "edit" && updated.status === "partial")) &&
         !isRetryableCreate(request.operation) &&
         targetPostId
       ) {

@@ -92,6 +92,17 @@ describe("owner X authorization classification", () => {
     ).toBeUndefined();
   });
 
+  it("retains the full quoted write payload within the tool limit", () => {
+    const content = "x".repeat(5_000);
+    expect(deriveAuthorization("Post this on X", content)).toEqual({
+      operation: "publish",
+      authorizedContent: content,
+    });
+    expect(
+      deriveAuthorization("Post this on X", "x".repeat(25_001)),
+    ).toBeUndefined();
+  });
+
   it("requires an explicit automation mutation verb and object", () => {
     expect(
       deriveAutomationAuthorization(

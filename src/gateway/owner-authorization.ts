@@ -98,7 +98,11 @@ export function deriveAuthorization(
   const authorizedContent = contentOperation(operation)
     ? quotedText?.trim()
     : undefined;
-  if (contentOperation(operation) && !authorizedContent) return undefined;
+  if (
+    contentOperation(operation) &&
+    (!authorizedContent || authorizedContent.length > 25_000)
+  )
+    return undefined;
   const authorizedScheduledFor =
     operation === "schedule" ? extractScheduledInstant(text) : undefined;
   if (operation === "schedule" && !authorizedScheduledFor) return undefined;

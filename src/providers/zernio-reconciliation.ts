@@ -106,16 +106,18 @@ export async function reconcileScheduledPublications(
     const expectedEditContent = editContent(row.operation, row.request_json);
     const editMismatch =
       row.operation === "edit" && post.content !== expectedEditContent;
+    const incompatibleDraft = observed === "draft" && row.operation !== "draft";
     const unsettled =
       incompletePublished ||
       editMismatch ||
+      incompatibleDraft ||
       observed === "publishing" ||
       observed === "scheduled";
     const pollCount = unsettled ? row.poll_count + 1 : 0;
     const exhausted = unsettled && pollCount >= 3;
     const status: XOperationStatus = exhausted
       ? "partial"
-      : incompletePublished || editMismatch
+      : incompletePublished || editMismatch || incompatibleDraft
         ? "publishing"
         : observed;
     const error = exhausted

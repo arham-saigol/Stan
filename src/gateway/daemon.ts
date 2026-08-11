@@ -125,9 +125,7 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
             body,
             attributes: {
               sourceMessageId: metadata.sourceMessageId,
-              ...(metadata.quotedText
-                ? { quoted: metadata.quotedText.slice(0, 4000) }
-                : {}),
+              ...(metadata.quotedText ? { quoted: metadata.quotedText } : {}),
             },
           },
           idempotencyKey,
