@@ -28,7 +28,8 @@ export async function repairDailyRollover(
          AND NOT (state = 'unknown' AND recovery_attempts >= 3) LIMIT 1`,
       )
       .get(previous.conversation_id);
-    if (unsettled) continue;
+    if (unsettled || hasUnsettledProactive(database, previous.local_date))
+      continue;
     database.database
       .prepare(
         "UPDATE daily_sessions SET state = 'closed', closed_at = ? WHERE local_date = ?",
@@ -108,20 +109,14 @@ function localTranscript(
       ],
     })),
   );
-  const start = Temporal.PlainDate.from(localDate).toZonedDateTime({
-    timeZone: TIMEZONE,
-    plainTime: Temporal.PlainTime.from("00:01"),
-  });
+  const [start, end] = sessionBounds(localDate);
   const automations = database.database
     .prepare(
       `SELECT r.scheduled_for, r.status, r.result, r.error, a.name, a.instruction
        FROM automation_runs r JOIN automations a ON a.id = r.automation_id
        WHERE r.scheduled_for >= ? AND r.scheduled_for < ?`,
     )
-    .all(
-      start.toInstant().toString(),
-      start.add({ days: 1 }).toInstant().toString(),
-    ) as {
+    .all(start, end) as {
     scheduled_for: string;
     status: string;
     result: string | null;
@@ -142,4 +137,38 @@ function localTranscript(
     .sort((left, right) => left.at.localeCompare(right.at))
     .flatMap((turn) => turn.lines)
     .join("\n");
+}
+
+function hasUnsettledProactive(
+  database: ApplicationDatabase,
+  localDate: string,
+): boolean {
+  const heartbeat = database.database
+    .prepare(
+      `SELECT 1 FROM heartbeat_occurrences WHERE local_date = ? AND (
+       status IN ('leased', 'running', 'ready') OR
+       (status = 'failed' AND attempts < 3 AND next_retry_at IS NOT NULL)) LIMIT 1`,
+    )
+    .get(localDate);
+  if (heartbeat) return true;
+  const [start, end] = sessionBounds(localDate);
+  return Boolean(
+    database.database
+      .prepare(
+        `SELECT 1 FROM automation_runs WHERE scheduled_for >= ? AND scheduled_for < ?
+         AND status IN ('leased', 'running', 'unknown', 'notification_pending') LIMIT 1`,
+      )
+      .get(start, end),
+  );
+}
+
+function sessionBounds(localDate: string): [string, string] {
+  const start = Temporal.PlainDate.from(localDate).toZonedDateTime({
+    timeZone: TIMEZONE,
+    plainTime: Temporal.PlainTime.from("00:01"),
+  });
+  return [
+    start.toInstant().toString(),
+    start.add({ days: 1 }).toInstant().toString(),
+  ];
 }

@@ -80,6 +80,12 @@ describe("heartbeat execution", () => {
     await scheduler.tick(Temporal.Instant.from("2026-08-13T04:00:00Z")); // busy at 09:00
     busy = false;
     await scheduler.tick(Temporal.Instant.from("2026-08-13T04:00:30Z"));
+    database.claimInbound({
+      id: "future-skewed",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "future message",
+      receivedAt: "2099-08-13T07:00:00Z",
+    });
     await scheduler.tick(Temporal.Instant.from("2026-08-13T07:00:00Z")); // 12:00
 
     expect(sendOwner).toHaveBeenCalledTimes(1);

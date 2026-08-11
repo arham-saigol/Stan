@@ -127,11 +127,14 @@ export class Scheduler {
         "SELECT received_at FROM inbound_messages ORDER BY received_at DESC LIMIT 1",
       )
       .get() as { received_at: string } | undefined;
+    const activityAge = lastOwner
+      ? now.epochMilliseconds - Date.parse(lastOwner.received_at)
+      : undefined;
     const recentlyActive =
-      occurrence.kind === "regular" && lastOwner
-        ? now.epochMilliseconds - Date.parse(lastOwner.received_at) <
-          30 * 60_000
-        : false;
+      occurrence.kind === "regular" &&
+      activityAge !== undefined &&
+      activityAge >= 0 &&
+      activityAge < 30 * 60_000;
     if (occurrence.kind === "morning" && this.agent.isBusy()) return;
     const status = this.agent.isBusy()
       ? "busy"

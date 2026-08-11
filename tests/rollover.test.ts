@@ -112,6 +112,64 @@ describe("daily session rollover", () => {
     database.close();
   });
 
+  it("waits for an interrupted proactive turn before closing", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const logger = pino({ level: "silent" });
+    await repairDailyRollover(
+      database,
+      undefined,
+      logger,
+      Temporal.Instant.from("2026-08-13T18:59:00Z"),
+    );
+    database.database
+      .prepare(
+        `INSERT INTO heartbeat_occurrences(occurrence_id, local_date, scheduled_for, kind, status, lease_until, created_at, updated_at)
+         VALUES (?, '2026-08-13', ?, 'regular', 'running', ?, ?, ?)`,
+      )
+      .run(
+        "heartbeat:2026-08-13:12:00",
+        "2026-08-13T07:00:00Z",
+        "2026-08-13T19:05:00Z",
+        "2026-08-13T07:00:00Z",
+        "2026-08-13T07:00:00Z",
+      );
+
+    await repairDailyRollover(
+      database,
+      undefined,
+      logger,
+      Temporal.Instant.from("2026-08-13T19:02:00Z"),
+    );
+    expect(
+      database.database
+        .prepare(
+          "SELECT state FROM daily_sessions WHERE local_date = '2026-08-13'",
+        )
+        .get(),
+    ).toEqual({ state: "active" });
+
+    database.database
+      .prepare(
+        "UPDATE heartbeat_occurrences SET status = 'silent', lease_until = NULL, reason = 'nothing useful'",
+      )
+      .run();
+    await repairDailyRollover(
+      database,
+      undefined,
+      logger,
+      Temporal.Instant.from("2026-08-13T19:02:30Z"),
+    );
+    expect(
+      database.database
+        .prepare(
+          "SELECT content FROM memory_documents WHERE custom_id = 'stan-session-2026-08-13'",
+        )
+        .get(),
+    ).toEqual({ content: "stan heartbeat (regular): nothing useful" });
+    database.close();
+  });
+
   it("includes proactive turns when a day has no owner messages", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
