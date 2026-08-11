@@ -176,6 +176,55 @@ describe("heartbeat execution", () => {
     database.close();
   });
 
+  it("reclaims an interrupted regular heartbeat after its lease expires", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-regular-lease-"));
+    const config = new ConfigStore(root);
+    await config.write(createDefaultConfig({ ownerPhone: "+923001234567" }));
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.database
+      .prepare(
+        `INSERT INTO heartbeat_occurrences(occurrence_id, local_date, scheduled_for, kind, status, lease_until, created_at, updated_at)
+         VALUES (?, ?, ?, 'regular', 'running', ?, ?, ?)`,
+      )
+      .run(
+        "heartbeat:2026-08-13:11:59",
+        "2026-08-13",
+        "2026-08-13T06:59:00Z",
+        "2026-08-13T06:59:30Z",
+        "2026-08-13T06:59:00Z",
+        "2026-08-13T06:59:00Z",
+      );
+    const deliver = vi.fn(
+      async (_id: string, message: { attributes?: Record<string, string> }) => {
+        database.database
+          .prepare(
+            "UPDATE heartbeat_occurrences SET status = 'silent', notify = 0 WHERE occurrence_id = ?",
+          )
+          .run(message.attributes!.occurrenceId!);
+        return "";
+      },
+    );
+    const scheduler = new Scheduler(
+      database,
+      config,
+      { isBusy: () => false, deliver } as unknown as StanAgentRuntime,
+      { sendOwner: vi.fn() } as unknown as DeliveryService,
+      new AutomationStore(database),
+      pino({ level: "silent" }),
+    );
+
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T07:00:00Z"));
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(
+      database.database
+        .prepare("SELECT status, next_retry_at FROM heartbeat_occurrences")
+        .get(),
+    ).toEqual({ status: "silent", next_retry_at: null });
+    database.close();
+  });
+
   it("reclaims a failed regular heartbeat after its scheduled minute", async () => {
     const root = await mkdtemp(join(tmpdir(), "stan-regular-recovery-"));
     const config = new ConfigStore(root);

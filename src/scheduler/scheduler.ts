@@ -62,11 +62,11 @@ export class Scheduler {
     }
     this.database.database
       .prepare(
-        `UPDATE heartbeat_occurrences SET status = 'failed', lease_until = NULL,
+        `UPDATE heartbeat_occurrences SET status = 'failed', lease_until = NULL, next_retry_at = ?,
          reason = 'Lease expired before completion could be verified', updated_at = ?
          WHERE status IN ('leased', 'running') AND lease_until < ?`,
       )
-      .run(now.toString(), now.toString());
+      .run(now.toString(), now.toString(), now.toString());
     const config = this.config.read();
     await this.runHeartbeat(config, now);
     await this.runAutomations(now);
@@ -220,7 +220,7 @@ export class Scheduler {
           if (suppression) {
             this.database.database
               .prepare(
-                "UPDATE heartbeat_occurrences SET status = 'silent', notify = 0, reason = ?, lease_until = NULL, updated_at = ? WHERE occurrence_id = ?",
+                "UPDATE heartbeat_occurrences SET status = 'silent', notify = 0, reason = ?, lease_until = NULL, next_retry_at = NULL, updated_at = ? WHERE occurrence_id = ?",
               )
               .run(suppression, new Date().toISOString(), occurrence.id);
             return;
@@ -247,6 +247,12 @@ export class Scheduler {
         }
       } else if (row.status !== "silent") {
         throw new Error("Heartbeat did not produce a structured response");
+      } else {
+        this.database.database
+          .prepare(
+            "UPDATE heartbeat_occurrences SET lease_until = NULL, next_retry_at = NULL, updated_at = ? WHERE occurrence_id = ?",
+          )
+          .run(now.toString(), occurrence.id);
       }
     } catch (error) {
       const failed = this.database.database
