@@ -664,6 +664,58 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.close();
   });
 
+  it("settles a missing prevalidated delete target as cancelled", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-delete",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "delete X post z-1",
+      receivedAt: "2026-08-13T00:00:00Z",
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-delete",
+      operation: "delete",
+      targetPostId: "z-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const provider = {
+      verifyPostAccount: vi.fn(async () => true),
+      mutate: vi.fn(async () => {
+        throw new Error("ambiguous delete outcome");
+      }),
+      getPost: vi.fn(async () => {
+        throw Object.assign(new Error("post not found"), { status: 404 });
+      }),
+    };
+    const operation = await new ZernioWriteService(database, provider).execute(
+      { sourceMessageId: "owner-delete", selectedAccountId: "account-1" },
+      { operation: "delete", providerPostId: "z-1" },
+    );
+    setOperationCreatedAt(database, operation.logicalId);
+    const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
+
+    await reconcileScheduledPublications(
+      database,
+      provider,
+      { sendOwner } as unknown as DeliveryService,
+      new Date("2026-08-13T00:02:00Z"),
+    );
+
+    expect(database.getXOperation(operation.logicalId)!.status).toBe(
+      "cancelled",
+    );
+    expect(sendOwner).toHaveBeenCalledOnce();
+    expect(
+      database.database
+        .prepare(
+          "SELECT 1 FROM scheduled_publications WHERE logical_operation_id = ?",
+        )
+        .get(operation.logicalId),
+    ).toBeUndefined();
+    database.close();
+  });
+
   it("does not treat a scheduled-publication notification outage as provider failure", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

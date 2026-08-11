@@ -49,6 +49,51 @@ export async function reconcileScheduledPublications(
     try {
       post = await provider.getPost(row.provider_id);
     } catch (error) {
+      if (
+        (row.operation === "cancel" || row.operation === "delete") &&
+        isNotFound(error)
+      ) {
+        database.database
+          .prepare(
+            "UPDATE x_operations SET status = 'cancelled', error = NULL, updated_at = ? WHERE provider_id = ?",
+          )
+          .run(now.toISOString(), row.provider_id);
+        database.database
+          .prepare(
+            "DELETE FROM scheduled_publications WHERE provider_id = ? AND logical_operation_id <> ?",
+          )
+          .run(row.provider_id, row.logical_operation_id);
+        const updated = database.updateXOperation(row.logical_operation_id, {
+          status: "cancelled",
+          providerId: row.provider_id,
+          error: null,
+        });
+        const message = renderStatus(
+          row.operation,
+          updated.status,
+          updated.publicUrl,
+          updated.error,
+        );
+        queueTerminalNotification(
+          database,
+          row.logical_operation_id,
+          updated.status,
+          message,
+          now,
+        );
+        await deliverTerminalNotification(
+          database,
+          delivery,
+          {
+            ...row,
+            last_status: updated.status,
+            notification_message: message,
+            notification_attempts: 0,
+          },
+          now,
+        );
+        continue;
+      }
       const pollCount = row.poll_count + 1;
       if (pollCount < 3) {
         database.database
@@ -275,6 +320,21 @@ function normalize(
     return postStatus;
   }
   return "publishing";
+}
+
+function isNotFound(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  if ("status" in error && error.status === 404) return true;
+  if ("statusCode" in error && error.statusCode === 404) return true;
+  return (
+    "response" in error &&
+    Boolean(
+      error.response &&
+      typeof error.response === "object" &&
+      "status" in error.response &&
+      error.response.status === 404,
+    )
+  );
 }
 
 function safeError(error: unknown): string {
