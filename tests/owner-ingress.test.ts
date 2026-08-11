@@ -46,6 +46,7 @@ async function harness() {
     dispatch,
     read,
     send,
+    now: () => new Date("2026-08-13T10:00:00.000Z"),
   });
   return { root, database, deliveries, dispatch, read, send, ingress };
 }
@@ -150,7 +151,10 @@ describe("owner-only ingress", () => {
     });
 
     expect(
-      await ingress.reconcilePending(5, new Date(Date.now() + 61_000)),
+      await ingress.reconcilePending(
+        5,
+        new Date(Date.parse("2026-08-13T10:00:00.000Z") + 61_000),
+      ),
     ).toBe(1);
 
     expect(dispatch).not.toHaveBeenCalled();
@@ -175,7 +179,7 @@ describe("owner-only ingress", () => {
     expect(await ingress.handle(message({ id: "never-recovers" }))).toEqual({
       status: "failed",
     });
-    const started = Date.now();
+    const started = Date.parse("2026-08-13T10:00:00.000Z");
     expect(await ingress.reconcilePending(5, new Date(started + 61_000))).toBe(
       1,
     );
@@ -205,7 +209,10 @@ describe("owner-only ingress", () => {
       status: "failed",
     });
     expect(
-      await ingress.reconcilePending(5, new Date(Date.now() + 61_000)),
+      await ingress.reconcilePending(
+        5,
+        new Date(Date.parse("2026-08-13T10:00:00.000Z") + 61_000),
+      ),
     ).toBe(1);
 
     expect(dispatch).toHaveBeenCalledOnce();
@@ -297,13 +304,14 @@ describe("owner-only ingress", () => {
     ]);
   });
 
-  it("derives one expiring publish envelope from an explicit owner command", async () => {
+  it("anchors an expiring publish envelope to trusted admission time", async () => {
     const { ingress, database, deliveries } = await harness();
 
     await ingress.handle(
       message({
         text: "Please post the quoted draft",
         quotedText: "Option 2",
+        receivedAt: "2099-08-13T10:00:00.000Z",
       }),
     );
 

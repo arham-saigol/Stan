@@ -98,7 +98,7 @@ export class AutomationStore {
 
   get(id: string): Automation | undefined {
     const row = this.application.database
-      .prepare("SELECT * FROM automations WHERE id = ?")
+      .prepare("SELECT * FROM automations WHERE id = ? AND deleted_at IS NULL")
       .get(id) as Record<string, string | number | null> | undefined;
     return row ? mapAutomation(row) : undefined;
   }
@@ -106,7 +106,9 @@ export class AutomationStore {
   list(): Automation[] {
     return (
       this.application.database
-        .prepare("SELECT * FROM automations ORDER BY created_at")
+        .prepare(
+          "SELECT * FROM automations WHERE deleted_at IS NULL ORDER BY created_at",
+        )
         .all() as Record<string, string | number | null>[]
     ).map(mapAutomation);
   }
@@ -149,13 +151,20 @@ export class AutomationStore {
 
   delete(id: string): boolean {
     return this.application.transaction(() => {
+      const timestamp = new Date().toISOString();
       this.application.database
-        .prepare("DELETE FROM automation_runs WHERE automation_id = ?")
+        .prepare(
+          "DELETE FROM automation_runs WHERE automation_id = ? AND status <> 'completed'",
+        )
         .run(id);
       return (
         this.application.database
-          .prepare("DELETE FROM automations WHERE id = ?")
-          .run(id).changes > 0
+          .prepare(
+            `UPDATE automations SET enabled = 0, next_run_at = NULL, deleted_at = ?,
+             name = name || ' [deleted ' || id || ']', updated_at = ?
+             WHERE id = ? AND deleted_at IS NULL`,
+          )
+          .run(timestamp, timestamp, id).changes > 0
       );
     });
   }
@@ -286,13 +295,22 @@ export class AutomationStore {
   }
 
   pruneCompleted(before: Date): number {
-    return Number(
+    return this.application.transaction(() => {
+      const changes = Number(
+        this.application.database
+          .prepare(
+            "DELETE FROM automation_runs WHERE status = 'completed' AND updated_at < ?",
+          )
+          .run(before.toISOString()).changes,
+      );
       this.application.database
         .prepare(
-          "DELETE FROM automation_runs WHERE status = 'completed' AND updated_at < ?",
+          `DELETE FROM automations WHERE deleted_at IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM automation_runs WHERE automation_id = automations.id)`,
         )
-        .run(before.toISOString()).changes,
-    );
+        .run();
+      return changes;
+    });
   }
 
   finishRun(

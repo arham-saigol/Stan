@@ -237,6 +237,47 @@ describe("declarative automations", () => {
     database.close();
   });
 
+  it("retains completed run history when an automation is deleted", () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const store = new AutomationStore(database);
+    const automation = store.create({
+      name: "daily report",
+      schedule: { type: "cron", expression: "0 * * * *" },
+      instruction: "Prepare the report",
+      deliveryMode: "silent",
+      creatorMessageId: "owner-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    database.database
+      .prepare(
+        `INSERT INTO automation_runs(occurrence_id, automation_id, scheduled_for, status, result, created_at, updated_at)
+         VALUES ('completed-run', ?, '2026-08-13T04:00:00Z', 'completed', 'report', ?, ?)`,
+      )
+      .run(automation.id, "2026-08-13T04:00:00Z", "2026-08-13T04:00:00Z");
+
+    expect(store.delete(automation.id)).toBe(true);
+    expect(store.get(automation.id)).toBeUndefined();
+    expect(
+      database.database
+        .prepare(
+          "SELECT status, result FROM automation_runs WHERE occurrence_id = 'completed-run'",
+        )
+        .get(),
+    ).toEqual({ status: "completed", result: "report" });
+    expect(() =>
+      store.create({
+        name: "daily report",
+        schedule: { type: "cron", expression: "0 * * * *" },
+        instruction: "Prepare another report",
+        deliveryMode: "silent",
+        creatorMessageId: "owner-2",
+        now: new Date("2026-08-13T01:00:00Z"),
+      }),
+    ).not.toThrow();
+    database.close();
+  });
+
   it("prunes only completed automation runs beyond retention", () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

@@ -49,6 +49,7 @@ export class OwnerIngress {
   private readonly dispatch: OwnerDispatch;
   private readonly read: OwnerRead;
   private readonly send: OwnerSend;
+  private readonly now: () => Date;
   private readonly processing = new Set<string>();
   private turnQueue: Promise<void> = Promise.resolve();
 
@@ -58,11 +59,13 @@ export class OwnerIngress {
     dispatch: OwnerDispatch;
     read: OwnerRead;
     send: OwnerSend;
+    now?: () => Date;
   }) {
     this.database = input.database;
     this.dispatch = input.dispatch;
     this.read = input.read;
     this.send = input.send;
+    this.now = input.now ?? (() => new Date());
     this.database.configureOwnerIdentity(
       `${input.ownerPhone.slice(1)}@s.whatsapp.net`,
     );
@@ -98,7 +101,7 @@ export class OwnerIngress {
     });
     if (!claimed) return { status: "duplicate" };
 
-    return this.enqueueProcess(message);
+    return this.enqueueProcess(message, undefined, undefined, this.now());
   }
 
   async reconcilePending(limit = 5, now = new Date()): Promise<number> {
@@ -183,7 +186,7 @@ export class OwnerIngress {
           this.database.createAuthorization({
             sourceMessageId: message.id,
             operation: authorization.operation,
-            now: new Date(message.receivedAt),
+            now,
             ...(authorization.targetPostId
               ? { targetPostId: authorization.targetPostId }
               : {}),
@@ -207,7 +210,7 @@ export class OwnerIngress {
           message.id,
           automationOperation.operation,
           automationOperation.payloadJson,
-          new Date(message.receivedAt),
+          now,
         );
       }
       const workspaceAuthorization = deriveWorkspaceAuthorization(message.text);
@@ -215,7 +218,7 @@ export class OwnerIngress {
         this.database.createWorkspaceAuthorization(
           message.id,
           workspaceAuthorization.payloadJson,
-          new Date(message.receivedAt),
+          now,
         );
       }
       const memoryAuthorization = deriveMemoryAuthorization(message.text);
@@ -224,7 +227,7 @@ export class OwnerIngress {
           message.id,
           memoryAuthorization.operation,
           memoryAuthorization.payloadJson,
-          new Date(message.receivedAt),
+          now,
         );
       }
       const heartbeatAuthorization = deriveHeartbeatSettingsAuthorization(
@@ -234,7 +237,7 @@ export class OwnerIngress {
         this.database.createHeartbeatSettingsAuthorization(
           message.id,
           heartbeatAuthorization.payloadJson,
-          new Date(message.receivedAt),
+          now,
         );
       }
       const sessionId =

@@ -187,7 +187,8 @@ CREATE TABLE IF NOT EXISTS automations (
   next_run_at TEXT,
   last_run_at TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
 ) STRICT;
 CREATE TABLE IF NOT EXISTS automation_runs (
   occurrence_id TEXT PRIMARY KEY,
@@ -360,6 +361,7 @@ export class ApplicationDatabase {
         "next_retry_at",
         "TEXT",
       );
+      addColumnIfMissing(this.database, "automations", "deleted_at", "TEXT");
       addColumnIfMissing(
         this.database,
         "automation_runs",
