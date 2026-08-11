@@ -602,6 +602,132 @@ describe("ambiguous Zernio operation reconciliation", () => {
     },
   );
 
+  it.each(["draft", "cancel"] as const)(
+    "surfaces an unexpectedly published %s as partial",
+    async (requestedOperation) => {
+      const database = new ApplicationDatabase(":memory:");
+      database.migrate();
+      database.claimInbound({
+        id: "owner-write",
+        senderIdentity: "923001234567@s.whatsapp.net",
+        body: `${requestedOperation} X post`,
+        receivedAt: "2026-08-13T00:00:00Z",
+      });
+      database.createAuthorization({
+        sourceMessageId: "owner-write",
+        operation: requestedOperation,
+        ...(requestedOperation === "cancel" ? { targetPostId: "z-1" } : {}),
+        now: new Date("2026-08-13T00:00:00Z"),
+      });
+      const provider = {
+        verifyPostAccount: vi.fn(async () => true),
+        mutate: vi.fn(async () => ({
+          status: "publishing" as const,
+          providerId: "z-1",
+        })),
+        getPost: vi.fn(async () => ({
+          status: "published" as const,
+          platforms: [
+            {
+              platform: "twitter" as const,
+              status: "published" as const,
+              platformPostId: "x-1",
+              platformPostUrl: "https://x.com/stan/status/x-1",
+            },
+          ],
+        })),
+      };
+      const request: ZernioMutationRequest =
+        requestedOperation === "draft"
+          ? { operation: "draft", content: "private draft" }
+          : { operation: "cancel", providerPostId: "z-1" };
+      const operation = await new ZernioWriteService(
+        database,
+        provider,
+      ).execute(
+        { sourceMessageId: "owner-write", selectedAccountId: "account-1" },
+        request,
+      );
+      setOperationCreatedAt(database, operation.logicalId);
+      const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
+
+      await reconcileScheduledPublications(
+        database,
+        provider,
+        { sendOwner } as unknown as DeliveryService,
+        new Date("2026-08-13T00:02:00Z"),
+      );
+
+      const resolved = database.getXOperation(operation.logicalId)!;
+      expect(resolved.status).toBe("partial");
+      expect(resolved.error).toContain("reported");
+      expect(sendOwner).toHaveBeenCalledOnce();
+      database.close();
+    },
+  );
+
+  it("defers a newly resolved schedule until after its due time", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-schedule",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "schedule X post",
+      receivedAt: "2026-08-13T00:00:00Z",
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-schedule",
+      operation: "schedule",
+      authorizedContent: "hello",
+      authorizedScheduledFor: "2026-08-14T00:00:00.000Z",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const provider = {
+      mutate: vi.fn(async () => ({
+        status: "scheduled" as const,
+        providerId: "z-1",
+      })),
+      getPost: vi.fn(async () => ({
+        status: "scheduled" as const,
+        scheduledFor: "2026-08-14T00:00:00Z",
+        platforms: [
+          { platform: "twitter" as const, status: "scheduled" as const },
+        ],
+      })),
+    };
+    const operation = await new ZernioWriteService(database, provider).execute(
+      { sourceMessageId: "owner-schedule", selectedAccountId: "account-1" },
+      {
+        operation: "schedule",
+        content: "hello",
+        scheduledFor: "2026-08-14T00:00:00Z",
+      },
+    );
+    setOperationCreatedAt(database, operation.logicalId);
+
+    await reconcileScheduledPublications(
+      database,
+      provider,
+      { sendOwner: vi.fn() } as unknown as DeliveryService,
+      new Date("2026-08-13T00:02:00Z"),
+    );
+
+    expect(database.getXOperation(operation.logicalId)!.status).toBe(
+      "scheduled",
+    );
+    expect(
+      database.database
+        .prepare(
+          "SELECT poll_count, next_poll_at FROM scheduled_publications WHERE logical_operation_id = ?",
+        )
+        .get(operation.logicalId),
+    ).toEqual({
+      poll_count: 0,
+      next_poll_at: "2026-08-14T00:01:00.000Z",
+    });
+    database.close();
+  });
+
   it("keeps an unchanged delete unresolved until bounded polling exhausts", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

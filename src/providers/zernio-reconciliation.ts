@@ -5,6 +5,7 @@ import type {
   ApplicationDatabase,
   XOperationStatus,
 } from "../storage/application-db.ts";
+import { firstSchedulePoll } from "./zernio-write-service.ts";
 
 interface ZernioStatusProvider {
   getPost(postId: string): Promise<Post>;
@@ -154,28 +155,41 @@ export async function reconcileScheduledPublications(
     const incompatibleDraft = observed === "draft" && row.operation !== "draft";
     const unchangedDelete =
       observed === "published" && row.operation === "delete";
+    const unexpectedPublication =
+      observed === "published" &&
+      (row.operation === "draft" || row.operation === "cancel");
+    const futureSchedule =
+      row.operation === "schedule" &&
+      observed === "scheduled" &&
+      Boolean(post.scheduledFor) &&
+      Date.parse(post.scheduledFor!) > now.getTime();
     const unsettled =
       incompletePublished ||
       editMismatch ||
       incompatibleDraft ||
       unchangedDelete ||
       observed === "publishing" ||
-      observed === "scheduled";
+      (observed === "scheduled" && !futureSchedule);
     const pollCount = unsettled ? row.poll_count + 1 : 0;
     const exhausted = unsettled && pollCount >= 3;
-    const status: XOperationStatus = exhausted
-      ? "partial"
-      : incompletePublished ||
-          editMismatch ||
-          incompatibleDraft ||
-          unchangedDelete
-        ? "publishing"
-        : observed;
-    const error = exhausted
-      ? editMismatch
+    let status = observed;
+    let error = target?.errorMessage ?? null;
+    if (unexpectedPublication) {
+      status = "partial";
+      error = `Zernio reported the ${row.operation} target as published`;
+    } else if (exhausted) {
+      status = "partial";
+      error = editMismatch
         ? "Zernio did not expose the authorized edited content after bounded polling"
-        : "Zernio did not reach a verifiable terminal state after bounded polling"
-      : (target?.errorMessage ?? null);
+        : "Zernio did not reach a verifiable terminal state after bounded polling";
+    } else if (
+      incompletePublished ||
+      editMismatch ||
+      incompatibleDraft ||
+      unchangedDelete
+    ) {
+      status = "publishing";
+    }
     const updated = database.updateXOperation(row.logical_operation_id, {
       status,
       providerId: row.provider_id,
@@ -219,7 +233,9 @@ export async function reconcileScheduledPublications(
           status,
           row.notified_status,
           pollCount,
-          new Date(now.getTime() + 5 * 60_000).toISOString(),
+          futureSchedule
+            ? firstSchedulePoll(post.scheduledFor ?? null, now)
+            : new Date(now.getTime() + 5 * 60_000).toISOString(),
           row.logical_operation_id,
         );
     }
