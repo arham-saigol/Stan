@@ -172,7 +172,7 @@ describe("trusted tool boundaries", () => {
     database.close();
   });
 
-  it("consumes exact single-use semantic-memory intent", async () => {
+  it("retries the exact idempotent memory mutation after provider failure", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
     database.claimInbound({
@@ -181,7 +181,10 @@ describe("trusted tool boundaries", () => {
       body: "remember: simple systems",
       receivedAt: new Date().toISOString(),
     });
-    const remember = vi.fn(async () => ({ id: "memory-1", status: "done" }));
+    const remember = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockResolvedValueOnce({ id: "memory-1", status: "done" });
     const tool = memoryTools(
       { remember } as unknown as SupermemoryProvider,
       database,
@@ -194,11 +197,15 @@ describe("trusted tool boundaries", () => {
       "remember",
       memoryMutationPayload("remember", data),
     );
+    await expect((tool.run as Run)({ data })).rejects.toThrow(/response lost/i);
     await expect((tool.run as Run)({ data })).resolves.toMatchObject({
       output: { id: "memory-1" },
     });
-    await expect((tool.run as Run)({ data })).rejects.toThrow(/authorization/i);
-    expect(remember).toHaveBeenCalledOnce();
+    await expect(
+      (tool.run as Run)({ data: { content: "different content" } }),
+    ).rejects.toThrow(/authorization/i);
+    expect(remember).toHaveBeenCalledTimes(2);
+    expect(remember.mock.calls[0]![1]).toBe(remember.mock.calls[1]![1]);
     database.close();
   });
 });

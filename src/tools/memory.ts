@@ -26,7 +26,7 @@ export function memoryTools(
       throw new Error(
         "This memory change requires a current owner-directed turn",
       );
-    database.consumeMemoryAuthorization(
+    return database.consumeMemoryAuthorization(
       trusted.sourceMessageId,
       operation,
       memoryMutationPayload(operation, input),
@@ -75,8 +75,8 @@ export function memoryTools(
       input: v.object({ documentId: v.string() }),
       async run({ data }) {
         const provider = client();
-        requireOwner("forget", data);
-        await provider.forgetDocument(data.documentId);
+        const firstAttempt = requireOwner("forget", data);
+        await provider.forgetDocument(data.documentId, !firstAttempt);
         return { output: { forgotten: true } };
       },
     }),

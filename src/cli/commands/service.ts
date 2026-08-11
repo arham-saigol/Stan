@@ -89,9 +89,23 @@ function isProcessRunning(pid: number): boolean {
 }
 
 export async function installAutostart(root: string): Promise<void> {
-  if (process.platform === "win32") return installWindowsTask(root);
-  if (process.platform === "linux") return installSystemdUserService(root);
-  throw new Error("Autostart installation supports Windows and systemd Linux");
+  const wasRunning = Boolean(await getDaemonStatus(root));
+  if (wasRunning) await stopService(root);
+  try {
+    if (process.platform === "win32") {
+      await installWindowsTask(root);
+      if (wasRunning) await startService(root);
+      return;
+    }
+    if (process.platform === "linux")
+      return await installSystemdUserService(root);
+    throw new Error(
+      "Autostart installation supports Windows and systemd Linux",
+    );
+  } catch (error) {
+    if (wasRunning) await startService(root).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function installSystemdUserService(root: string): Promise<void> {

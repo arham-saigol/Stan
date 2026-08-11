@@ -70,9 +70,15 @@ export class SupermemoryProvider {
     });
   }
 
-  async forgetDocument(id: string): Promise<void> {
+  async forgetDocument(id: string, missingIsSuccess = false): Promise<void> {
     const documentId = bounded(id, 200);
-    const document = await this.client.documents.get(documentId);
+    let document;
+    try {
+      document = await this.client.documents.get(documentId);
+    } catch (error) {
+      if (missingIsSuccess && isNotFound(error)) return;
+      throw error;
+    }
     if (!document.containerTags?.includes(this.containerTag)) {
       throw new Error(
         "The memory document is outside Stan's private container",
@@ -84,6 +90,15 @@ export class SupermemoryProvider {
   async status(id: string): Promise<unknown> {
     return this.client.documents.get(bounded(id, 200));
   }
+}
+
+function isNotFound(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    "status" in error &&
+    error.status === 404,
+  );
 }
 
 function bounded(value: string, maximum: number): string {

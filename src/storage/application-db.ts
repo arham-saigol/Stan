@@ -773,8 +773,9 @@ export class ApplicationDatabase {
     sourceMessageId: string,
     operation: MemoryAuthorizationOperation,
     payloadJson: string,
-  ): void {
+  ): boolean {
     const now = new Date();
+    const earliest = new Date(now.getTime() - 15 * 60_000).toISOString();
     const result = this.database
       .prepare(
         `UPDATE memory_authorizations SET consumed_at = ?
@@ -786,13 +787,20 @@ export class ApplicationDatabase {
         sourceMessageId,
         operation,
         payloadJson,
-        new Date(now.getTime() - 15 * 60_000).toISOString(),
+        earliest,
       );
-    if (result.changes !== 1) {
-      throw new Error(
-        `Current owner authorization is required to ${operation} memory`,
-      );
-    }
+    if (result.changes === 1) return true;
+    const retry = this.database
+      .prepare(
+        `SELECT 1 FROM memory_authorizations
+         WHERE source_message_id = ? AND operation = ? AND payload_json = ?
+           AND consumed_at IS NOT NULL`,
+      )
+      .get(sourceMessageId, operation, payloadJson);
+    if (retry) return false;
+    throw new Error(
+      `Current owner authorization is required to ${operation} memory`,
+    );
   }
 
   createHeartbeatSettingsAuthorization(
