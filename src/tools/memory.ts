@@ -41,12 +41,13 @@ export function memoryTools(
         content: v.pipe(v.string(), v.minLength(1), v.maxLength(20_000)),
       }),
       async run({ data }) {
+        const provider = client();
         requireOwner("remember", data);
         const customId = `stan-explicit-${createHash("sha256")
           .update(`${trusted.sourceMessageId!}\0${data.content}`)
           .digest("hex")}`;
         return {
-          output: await client().remember(data.content, customId),
+          output: await provider.remember(data.content, customId),
         };
       },
     }),
@@ -73,8 +74,9 @@ export function memoryTools(
         "Permanently delete one Supermemory document after an exact `forget memory <documentId>` owner command.",
       input: v.object({ documentId: v.string() }),
       async run({ data }) {
+        const provider = client();
         requireOwner("forget", data);
-        await client().forgetDocument(data.documentId);
+        await provider.forgetDocument(data.documentId);
         return { output: { forgotten: true } };
       },
     }),

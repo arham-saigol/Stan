@@ -64,6 +64,33 @@ describe("durable memory ingestion", () => {
     database.close();
   });
 
+  it("bounds provider documents that remain pending", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const memory = {
+      ingestSession: vi.fn(async () => ({ id: "memory-1", status: "pending" })),
+      status: vi.fn(async () => ({ status: "pending" })),
+    } as unknown as SupermemoryProvider;
+
+    await ingestPendingMemory(database, memory, input);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      database.database.exec(
+        "UPDATE memory_documents SET next_attempt_at = '2000-01-01T00:00:00Z' WHERE status != 'failed'",
+      );
+      await reconcilePendingMemory(database, memory);
+    }
+
+    expect(memory.status).toHaveBeenCalledTimes(2);
+    expect(
+      database.database
+        .prepare(
+          "SELECT status, attempts, next_attempt_at FROM memory_documents",
+        )
+        .get(),
+    ).toEqual({ status: "failed", attempts: 3, next_attempt_at: null });
+    database.close();
+  });
+
   it("clears stale provider state when a transcript is refreshed", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

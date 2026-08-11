@@ -89,19 +89,36 @@ export async function reconcilePendingMemory(
           status?: string;
         };
         const status = document.status ?? row.status;
-        database.database
-          .prepare(
-            "UPDATE memory_documents SET status = ?, next_attempt_at = ?, updated_at = ? WHERE custom_id = ?",
-          )
-          .run(
-            status,
-            status === "done"
-              ? null
-              : new Date(Date.now() + 2 * 60_000).toISOString(),
-            new Date().toISOString(),
-            row.custom_id,
-          );
-        if (status !== "failed") continue;
+        if (status === "done") {
+          database.database
+            .prepare(
+              "UPDATE memory_documents SET status = 'done', next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE custom_id = ?",
+            )
+            .run(new Date().toISOString(), row.custom_id);
+          continue;
+        }
+        if (status !== "failed") {
+          const attempts = row.attempts + 1;
+          const exhausted = attempts >= 3;
+          database.database
+            .prepare(
+              `UPDATE memory_documents SET status = ?, attempts = ?, next_attempt_at = ?,
+               last_error = ?, updated_at = ? WHERE custom_id = ?`,
+            )
+            .run(
+              exhausted ? "failed" : status,
+              attempts,
+              exhausted
+                ? null
+                : new Date(Date.now() + 2 * 60_000).toISOString(),
+              exhausted
+                ? "Memory provider did not finish within the retry limit"
+                : null,
+              new Date().toISOString(),
+              row.custom_id,
+            );
+          continue;
+        }
         if (row.attempts >= 3) {
           database.database
             .prepare(

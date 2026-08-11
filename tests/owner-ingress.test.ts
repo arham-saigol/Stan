@@ -292,6 +292,29 @@ describe("owner-only ingress", () => {
     });
   });
 
+  it("creates a transcript session for a delayed missed-day message", async () => {
+    const { ingress, database } = await harness();
+
+    await ingress.handle(
+      message({
+        id: "missed-day-owner-message",
+        receivedAt: "2026-08-12T10:00:00.000Z",
+      }),
+    );
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT local_date, conversation_id, state FROM daily_sessions WHERE local_date = '2026-08-12'",
+        )
+        .get(),
+    ).toEqual({
+      local_date: "2026-08-12",
+      conversation_id: "stan-owner-2026-08-12",
+      state: "active",
+    });
+  });
+
   it("reopens a closed transcript when a delayed provider message is admitted", async () => {
     const { ingress, database } = await harness();
     database.database

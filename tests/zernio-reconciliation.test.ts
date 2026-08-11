@@ -515,6 +515,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
       { sourceMessageId: "owner-edit", selectedAccountId: "account-1" },
       { operation: "edit", providerPostId: "z-1", content: "new content" },
     );
+    setOperationCreatedAt(database, operation.logicalId);
     const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
     const delivery = { sendOwner } as unknown as DeliveryService;
 
@@ -573,6 +574,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
       { sourceMessageId: "owner-1", selectedAccountId: "account-1" },
       { operation: "publish", content: "hello" },
     );
+    setOperationCreatedAt(database, operation.logicalId);
     const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
 
     for (const time of [
@@ -704,6 +706,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
       { sourceMessageId: "owner-1", selectedAccountId: "account-1" },
       { operation: "publish", content: "hello" },
     );
+    setOperationCreatedAt(database, operation.logicalId);
     const sendOwner = vi.fn(async () => {
       throw new Error("WhatsApp offline");
     });

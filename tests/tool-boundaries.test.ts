@@ -7,9 +7,11 @@ import { automationTools } from "../src/tools/automations.ts";
 import { memoryTools } from "../src/tools/memory.ts";
 import type { SupermemoryProvider } from "../src/memory/supermemory.ts";
 import { AutomationStore } from "../src/scheduler/automations.ts";
-import { automationMutationPayload } from "../src/gateway/owner-authorization.ts";
-import { workspaceMutationPayload } from "../src/gateway/owner-authorization.ts";
-import { memoryMutationPayload } from "../src/gateway/owner-authorization.ts";
+import {
+  automationMutationPayload,
+  memoryMutationPayload,
+  workspaceMutationPayload,
+} from "../src/gateway/owner-authorization.ts";
 
 type Run = (context: { data: Record<string, unknown> }) => Promise<unknown>;
 
@@ -131,6 +133,42 @@ describe("trusted tool boundaries", () => {
       output: { name: "explicit reminder" },
     });
     await expect((tool.run as Run)(input)).rejects.toThrow(/authorization/i);
+    database.close();
+  });
+
+  it("does not consume memory intent when Supermemory is unavailable", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-memory",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "remember: simple systems",
+      receivedAt: new Date().toISOString(),
+    });
+    const data = { content: "simple systems" };
+    database.createMemoryAuthorization(
+      "owner-memory",
+      "remember",
+      memoryMutationPayload("remember", data),
+    );
+    const trusted = { kind: "owner" as const, sourceMessageId: "owner-memory" };
+    const unavailable = memoryTools(undefined, database, trusted).find(
+      (candidate) => candidate.name === "remember",
+    )!;
+
+    await expect((unavailable.run as Run)({ data })).rejects.toThrow(
+      /Supermemory is unavailable/i,
+    );
+
+    const remember = vi.fn(async () => ({ id: "memory-1", status: "done" }));
+    const available = memoryTools(
+      { remember } as unknown as SupermemoryProvider,
+      database,
+      trusted,
+    ).find((candidate) => candidate.name === "remember")!;
+    await expect((available.run as Run)({ data })).resolves.toMatchObject({
+      output: { id: "memory-1" },
+    });
     database.close();
   });
 

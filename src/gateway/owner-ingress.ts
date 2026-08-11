@@ -1,4 +1,4 @@
-import { dailySessionId } from "../scheduler/rollover.ts";
+import { dailySessionId, pakistanRoutingDate } from "../scheduler/rollover.ts";
 import type { DeliveryService } from "./delivery.ts";
 import {
   type ApplicationDatabase,
@@ -220,10 +220,15 @@ export class OwnerIngress {
         persistedSessionId ?? dailySessionId(message.receivedAt);
       this.database.database
         .prepare(
-          `UPDATE daily_sessions SET state = 'active', closed_at = NULL, transcript_complete = 0
-           WHERE conversation_id = ? AND state = 'closed'`,
+          `INSERT INTO daily_sessions(local_date, conversation_id, state, created_at)
+           VALUES (?, ?, 'active', ?) ON CONFLICT(local_date) DO UPDATE SET
+           state = 'active', closed_at = NULL, transcript_complete = 0`,
         )
-        .run(sessionId);
+        .run(
+          pakistanRoutingDate(message.receivedAt),
+          sessionId,
+          message.receivedAt,
+        );
       this.database.setInboundState(message.id, "dispatched", { sessionId });
       const submissionId =
         persistedSubmissionId ??

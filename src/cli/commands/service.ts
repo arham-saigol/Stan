@@ -56,18 +56,36 @@ export async function startService(root: string): Promise<DaemonStatus> {
 
 export async function stopService(root: string): Promise<boolean> {
   const credentials = new CredentialStore(root).tryRead();
-  if (!credentials || !(await getDaemonStatus(root))) return false;
-  await fetch(`http://127.0.0.1:${CONTROL_PORT}/stop`, {
+  const status = await getDaemonStatus(root);
+  if (!credentials || !status) return false;
+  const response = await fetch(`http://127.0.0.1:${CONTROL_PORT}/stop`, {
     method: "POST",
     headers: { authorization: `Bearer ${credentials.controlToken}` },
     signal: AbortSignal.timeout(3000),
   });
+  if (!response.ok) {
+    throw new Error(`Stan refused the stop request (${response.status})`);
+  }
   const deadline = Date.now() + DRAIN_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
-    if (!(await getDaemonStatus(root))) return true;
+    if (!(await getDaemonStatus(root)) && !isProcessRunning(status.pid))
+      return true;
   }
   throw new Error("Stan did not stop at a safe boundary within one hour");
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ESRCH"
+    );
+  }
 }
 
 export async function installAutostart(root: string): Promise<void> {
