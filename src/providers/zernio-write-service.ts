@@ -257,6 +257,8 @@ export function verifiedStatus(
   operation: ZernioMutationRequest["operation"],
   result: ProviderMutationResult,
 ): XOperationStatus {
+  if (operation === "draft" && result.status === "draft" && !result.providerId)
+    return "publishing";
   if (result.status === "published" && (!result.publicId || !result.publicUrl))
     return "partial";
   if (

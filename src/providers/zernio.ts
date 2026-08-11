@@ -21,7 +21,7 @@ export class ZernioProvider implements ZernioMutationProvider {
   }
 
   async verifyPostAccount(postId: string, accountId: string): Promise<boolean> {
-    const post = await this.getPost(postId);
+    const post = await this.resolvePost(postId, accountId);
     return this.postBelongsToAccount(post, accountId);
   }
 
@@ -44,14 +44,18 @@ export class ZernioProvider implements ZernioMutationProvider {
       });
       return mapPost(data.post);
     }
+    const providerPostId = await this.resolveProviderPostId(
+      request.providerPostId,
+      input.accountId,
+    );
     if (request.operation === "edit") {
       const { data } = await this.client.posts.editPost({
-        path: { postId: request.providerPostId },
+        path: { postId: providerPostId },
         body: { platform: "twitter", content: request.content },
       });
       return {
         status: data.success ? "published" : "failed",
-        providerId: request.providerPostId,
+        providerId: providerPostId,
         ...(data.id ? { publicId: data.id } : {}),
         ...(data.url ? { publicUrl: data.url } : {}),
         ...(!data.success && data.message ? { error: data.message } : {}),
@@ -59,26 +63,26 @@ export class ZernioProvider implements ZernioMutationProvider {
     }
     if (request.operation === "cancel") {
       await this.client.posts.deletePost({
-        path: { postId: request.providerPostId },
+        path: { postId: providerPostId },
       });
-      return { status: "cancelled", providerId: request.providerPostId };
+      return { status: "cancelled", providerId: providerPostId };
     }
-    const current = await this.getPost(request.providerPostId);
+    const current = await this.getPost(providerPostId);
     if (current.status === "published" || current.status === "partial") {
       const { data } = await this.client.posts.unpublishPost({
-        path: { postId: request.providerPostId },
+        path: { postId: providerPostId },
         body: { platform: "twitter" },
       });
       return {
         status: data.success ? "cancelled" : "failed",
-        providerId: request.providerPostId,
+        providerId: providerPostId,
         ...(!data.success && data.message ? { error: data.message } : {}),
       };
     }
     await this.client.posts.deletePost({
-      path: { postId: request.providerPostId },
+      path: { postId: providerPostId },
     });
-    return { status: "cancelled", providerId: request.providerPostId };
+    return { status: "cancelled", providerId: providerPostId };
   }
 
   async getBoundAccount(accountId: string): Promise<ConnectedXAccount> {
@@ -139,6 +143,41 @@ export class ZernioProvider implements ZernioMutationProvider {
       query: { postId },
     });
     return data;
+  }
+
+  private async resolveProviderPostId(
+    postId: string,
+    accountId: string,
+  ): Promise<string> {
+    const post = await this.resolvePost(postId, accountId);
+    if (!post._id) throw new Error("Zernio returned a post without an ID");
+    return post._id;
+  }
+
+  private async resolvePost(postId: string, accountId: string): Promise<Post> {
+    if (!/^\d+$/.test(postId)) return this.getPost(postId);
+    for (let page = 1; page <= 20; page += 1) {
+      const { data } = await this.client.posts.listPosts({
+        query: {
+          accountId,
+          platform: "twitter",
+          limit: 25,
+          page,
+          sortBy: "created-desc",
+          source: "zernio",
+        },
+      });
+      const posts: Post[] = data.posts ?? [];
+      const match = posts.find((post) =>
+        post.platforms?.some(
+          (target) =>
+            target.platform === "twitter" && target.platformPostId === postId,
+        ),
+      );
+      if (match) return match;
+      if (posts.length < 25) break;
+    }
+    throw new Error("No Zernio post matches the authorized X status ID");
   }
 
   private postBelongsToAccount(post: Post, accountId: string): boolean {

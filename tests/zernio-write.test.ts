@@ -4,6 +4,7 @@ import {
   ZernioWriteService,
   type ZernioMutationProvider,
 } from "../src/providers/zernio-write-service.ts";
+import { ZernioProvider } from "../src/providers/zernio.ts";
 
 function authorized(database: ApplicationDatabase, text = "post it") {
   database.bindOwnerIdentity("923001234567@s.whatsapp.net", "pn");
@@ -388,6 +389,83 @@ describe("Zernio public-write boundary", () => {
         )
         .get(result.logicalId),
     ).toEqual({ provider_id: "z-incomplete" });
+    database.close();
+  });
+
+  it("resolves an authorized X status ID before editing through Zernio", async () => {
+    const provider = new ZernioProvider("test-key");
+    const editPost = vi.fn(async () => ({ data: { success: true } }));
+    Object.assign(provider as unknown as { client: unknown }, {
+      client: {
+        posts: {
+          getPost: vi.fn(async () => {
+            throw new Error("not a Zernio post ID");
+          }),
+          listPosts: vi.fn(async () => ({
+            data: {
+              posts: [
+                {
+                  _id: "z-1",
+                  status: "published",
+                  platforms: [
+                    {
+                      platform: "twitter",
+                      accountId: "account-1",
+                      platformPostId: "1900123456789",
+                    },
+                  ],
+                },
+              ],
+            },
+          })),
+          editPost,
+        },
+      },
+    });
+
+    await expect(
+      provider.verifyPostAccount("1900123456789", "account-1"),
+    ).resolves.toBe(true);
+    await expect(
+      provider.mutate({
+        requestId: "request-1",
+        accountId: "account-1",
+        request: {
+          operation: "edit",
+          providerPostId: "1900123456789",
+          content: "changed",
+        },
+      }),
+    ).resolves.toMatchObject({ status: "published", providerId: "z-1" });
+    expect(editPost).toHaveBeenCalledWith(
+      expect.objectContaining({ path: { postId: "z-1" } }),
+    );
+  });
+
+  it("keeps an ID-less draft unresolved and retryable", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-draft",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "save this as an X draft",
+      receivedAt: new Date().toISOString(),
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-draft",
+      operation: "draft",
+    });
+    const service = new ZernioWriteService(database, {
+      mutate: vi.fn(async () => ({ status: "draft" as const })),
+    });
+
+    const result = await service.execute(
+      { sourceMessageId: "owner-draft", selectedAccountId: "account-1" },
+      { operation: "draft", content: "hello" },
+    );
+
+    expect(result.status).toBe("publishing");
+    expect(result.nextRetryAt).not.toBeNull();
     database.close();
   });
 
