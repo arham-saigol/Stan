@@ -112,6 +112,48 @@ describe("daily session rollover", () => {
     database.close();
   });
 
+  it("includes proactive turns when a day has no owner messages", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const logger = pino({ level: "silent" });
+    await repairDailyRollover(
+      database,
+      undefined,
+      logger,
+      Temporal.Instant.from("2026-08-13T18:59:00Z"),
+    );
+    database.database
+      .prepare(
+        `INSERT INTO heartbeat_occurrences(occurrence_id, local_date, scheduled_for, kind, status, notify, message, created_at, updated_at)
+         VALUES (?, '2026-08-13', ?, 'regular', 'notified', 1, ?, ?, ?)`,
+      )
+      .run(
+        "heartbeat:2026-08-13:12:00",
+        "2026-08-13T07:00:00Z",
+        "A useful proactive update",
+        "2026-08-13T07:00:00Z",
+        "2026-08-13T07:00:00Z",
+      );
+
+    await repairDailyRollover(
+      database,
+      undefined,
+      logger,
+      Temporal.Instant.from("2026-08-13T19:02:00Z"),
+    );
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT content FROM memory_documents WHERE custom_id = 'stan-session-2026-08-13'",
+        )
+        .get(),
+    ).toEqual({
+      content: "stan heartbeat (regular): A useful proactive update",
+    });
+    database.close();
+  });
+
   it("closes a session once an owner turn exhausts recovery", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

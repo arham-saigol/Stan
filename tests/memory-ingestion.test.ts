@@ -3,7 +3,7 @@ import {
   ingestPendingMemory,
   reconcilePendingMemory,
 } from "../src/memory/ingestion.ts";
-import type { SupermemoryProvider } from "../src/memory/supermemory.ts";
+import { SupermemoryProvider } from "../src/memory/supermemory.ts";
 import { ApplicationDatabase } from "../src/storage/application-db.ts";
 
 const input = {
@@ -14,6 +14,30 @@ const input = {
 };
 
 describe("durable memory ingestion", () => {
+  it("marks a truncated provider upload incomplete", async () => {
+    const memory = new SupermemoryProvider("test-key", "stan-test");
+    const requests: { content: string; metadata: { complete: boolean } }[] = [];
+    const add = vi.fn(
+      async (request: { content: string; metadata: { complete: boolean } }) => {
+        requests.push(request);
+        return { id: "memory-1", status: "done" };
+      },
+    );
+    Object.assign(memory as unknown as { client: unknown }, {
+      client: { add },
+    });
+
+    await memory.ingestSession({
+      ...input,
+      transcript: `dropped-prefix${"x".repeat(200_000)}`,
+    });
+
+    expect(requests[0]).toMatchObject({
+      content: "x".repeat(200_000),
+      metadata: { complete: false },
+    });
+  });
+
   it("bounds permanent failures and redacts the persisted provider error", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

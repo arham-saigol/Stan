@@ -30,15 +30,16 @@ export class SupermemoryProvider {
     transcript: string;
     complete: boolean;
   }): Promise<{ id: string; status: string }> {
+    const transcript = input.transcript.trim();
     return this.client.add({
-      content: truncated(input.transcript, 200_000),
+      content: truncated(transcript, 200_000),
       customId: `stan-session-${input.localDate}`,
       containerTag: this.containerTag,
       metadata: {
         source: "stan-session",
         date: input.localDate,
         conversationId: input.conversationId,
-        complete: input.complete,
+        complete: input.complete && transcript.length <= 200_000,
       },
     });
   }
