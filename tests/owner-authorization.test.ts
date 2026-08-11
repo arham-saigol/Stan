@@ -85,6 +85,13 @@ describe("owner X authorization classification", () => {
     });
     expect(deriveAuthorization("Post this on X")).toBeUndefined();
     expect(
+      deriveAuthorization("Save this as an X draft", "Exact draft"),
+    ).toEqual({
+      operation: "draft",
+      authorizedContent: "Exact draft",
+    });
+    expect(deriveAuthorization("Save this as an X draft")).toBeUndefined();
+    expect(
       deriveAuthorization(
         "Schedule this X post for 2026-02-30T09:00:00Z",
         "Exact post text",

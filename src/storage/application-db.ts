@@ -633,7 +633,8 @@ export class ApplicationDatabase {
         );
       }
       if (
-        (input.operation === "publish" ||
+        (input.operation === "draft" ||
+          input.operation === "publish" ||
           input.operation === "schedule" ||
           input.operation === "reply" ||
           input.operation === "edit") &&

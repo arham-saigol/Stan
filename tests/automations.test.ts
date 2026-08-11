@@ -106,6 +106,16 @@ describe("declarative automations", () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
     const store = new AutomationStore(database);
+    expect(() =>
+      store.create({
+        name: "host-dependent",
+        schedule: { type: "once", at: "2026-08-13T09:00:00" },
+        instruction: "Prepare a private report",
+        deliveryMode: "silent",
+        creatorMessageId: "owner-1",
+        now: new Date("2026-08-13T00:00:00Z"),
+      }),
+    ).toThrow(/UTC offset/i);
     store.create({
       name: "once",
       schedule: { type: "once", at: "2026-08-13T09:00:00+05:00" },

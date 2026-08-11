@@ -372,6 +372,7 @@ function validOptionalInteger(
 
 function contentOperation(operation: AuthorizationOperation): boolean {
   return (
+    operation === "draft" ||
     operation === "publish" ||
     operation === "schedule" ||
     operation === "reply" ||

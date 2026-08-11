@@ -616,7 +616,9 @@ describe("ambiguous Zernio operation reconciliation", () => {
       database.createAuthorization({
         sourceMessageId: "owner-write",
         operation: requestedOperation,
-        ...(requestedOperation === "cancel" ? { targetPostId: "z-1" } : {}),
+        ...(requestedOperation === "cancel"
+          ? { targetPostId: "z-1" }
+          : { authorizedContent: "private draft" }),
         now: new Date("2026-08-13T00:00:00Z"),
       });
       const provider = {

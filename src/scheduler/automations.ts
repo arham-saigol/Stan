@@ -59,7 +59,9 @@ export class AutomationStore {
     const now = input.now ?? new Date();
     const count = (
       this.application.database
-        .prepare("SELECT COUNT(*) AS count FROM automations")
+        .prepare(
+          "SELECT COUNT(*) AS count FROM automations WHERE deleted_at IS NULL",
+        )
         .get() as { count: number }
     ).count;
     if (count >= 50)
@@ -408,6 +410,9 @@ function nextRunFor(schedule: AutomationSchedule, now: Date): Date | null {
 }
 
 function normalizeInstant(value: string): string {
+  if (!/(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) {
+    throw new Error("One-shot automation time must include a UTC offset");
+  }
   const milliseconds = Date.parse(value);
   if (!Number.isFinite(milliseconds))
     throw new Error("One-shot automation time is invalid");

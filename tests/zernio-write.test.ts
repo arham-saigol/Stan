@@ -454,6 +454,7 @@ describe("Zernio public-write boundary", () => {
     database.createAuthorization({
       sourceMessageId: "owner-draft",
       operation: "draft",
+      authorizedContent: "hello",
     });
     const service = new ZernioWriteService(database, {
       mutate: vi.fn(async () => ({ status: "draft" as const })),
