@@ -152,22 +152,24 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
       logger,
       async (now) => {
         await repairDailyRollover(database, memory, logger, now);
-        await ingress.reconcilePending();
-        await reconcilePendingReplies(database, delivery);
         if (memory) await reconcilePendingMemory(database, memory);
-        if (zernio) {
-          await reconcilePendingXOperations(
-            database,
-            zernio,
-            delivery,
-            new Date(now.epochMilliseconds),
-          );
-          await reconcileScheduledPublications(
-            database,
-            zernio,
-            delivery,
-            new Date(now.epochMilliseconds),
-          );
+        if (whatsapp.status() === "open") {
+          await ingress.reconcilePending();
+          await reconcilePendingReplies(database, delivery);
+          if (zernio) {
+            await reconcilePendingXOperations(
+              database,
+              zernio,
+              delivery,
+              new Date(now.epochMilliseconds),
+            );
+            await reconcileScheduledPublications(
+              database,
+              zernio,
+              delivery,
+              new Date(now.epochMilliseconds),
+            );
+          }
         }
       },
       async () => {

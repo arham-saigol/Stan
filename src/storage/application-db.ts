@@ -165,6 +165,7 @@ CREATE TABLE IF NOT EXISTS heartbeat_occurrences (
   kind TEXT NOT NULL CHECK (kind IN ('morning', 'regular')),
   status TEXT NOT NULL CHECK (status IN ('leased', 'running', 'ready', 'notified', 'silent', 'quiet-hours', 'busy', 'suppressed', 'duplicate', 'disabled', 'failed')),
   lease_until TEXT,
+  flue_submission_id TEXT,
   notify INTEGER CHECK (notify IN (0, 1)),
   message TEXT,
   reason TEXT,
@@ -339,6 +340,12 @@ export class ApplicationDatabase {
         this.database,
         "automation_authorizations",
         "payload_json",
+        "TEXT",
+      );
+      addColumnIfMissing(
+        this.database,
+        "heartbeat_occurrences",
+        "flue_submission_id",
         "TEXT",
       );
       addColumnIfMissing(

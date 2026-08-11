@@ -285,6 +285,16 @@ export class AutomationStore {
       );
   }
 
+  pruneCompleted(before: Date): number {
+    return Number(
+      this.application.database
+        .prepare(
+          "DELETE FROM automation_runs WHERE status = 'completed' AND updated_at < ?",
+        )
+        .run(before.toISOString()).changes,
+    );
+  }
+
   finishRun(
     occurrenceId: string,
     result: {

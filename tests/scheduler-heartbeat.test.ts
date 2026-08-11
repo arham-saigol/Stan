@@ -11,6 +11,34 @@ import { AutomationStore } from "../src/scheduler/automations.ts";
 import { Scheduler } from "../src/scheduler/scheduler.ts";
 import { ApplicationDatabase } from "../src/storage/application-db.ts";
 
+type HeartbeatMessage = { attributes?: Record<string, string> };
+
+function heartbeatRuntime(
+  deliver: (id: string, message: HeartbeatMessage) => Promise<string>,
+  isBusy: () => boolean = () => false,
+): StanAgentRuntime {
+  const submissions = new Map<
+    string,
+    { conversationId: string; message: HeartbeatMessage }
+  >();
+  let sequence = 0;
+  return {
+    isBusy,
+    dispatch: vi.fn(async (conversationId: string, message: unknown) => {
+      const submissionId = `submission-${++sequence}`;
+      submissions.set(submissionId, {
+        conversationId,
+        message: message as HeartbeatMessage,
+      });
+      return submissionId;
+    }),
+    read: vi.fn(async (_conversationId: string, submissionId: string) => {
+      const submission = submissions.get(submissionId)!;
+      return deliver(submission.conversationId, submission.message);
+    }),
+  } as unknown as StanAgentRuntime;
+}
+
 describe("heartbeat execution", () => {
   it("sends the model-written morning response once and lets a regular run stay silent", async () => {
     const root = await mkdtemp(join(tmpdir(), "stan-heartbeat-run-"));
@@ -20,29 +48,22 @@ describe("heartbeat execution", () => {
     database.migrate();
     const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
     let busy = true;
-    const agent = {
-      isBusy: () => busy,
-      deliver: vi.fn(
-        async (
-          _id: string,
-          message: { attributes?: Record<string, string> },
-        ) => {
-          const occurrenceId = message.attributes!.occurrenceId!;
-          const morning = message.attributes!.kind === "morning";
-          database.database
-            .prepare(
-              "UPDATE heartbeat_occurrences SET status = ?, notify = ?, message = ?, reason = 'nothing_useful' WHERE occurrence_id = ?",
-            )
-            .run(
-              morning ? "ready" : "silent",
-              morning ? 1 : 0,
-              morning ? "Morning — what should we work on?" : null,
-              occurrenceId,
-            );
-          return morning ? "Morning — what should we work on?" : "";
-        },
-      ),
-    } as unknown as StanAgentRuntime;
+    const deliver = vi.fn(async (_id: string, message: HeartbeatMessage) => {
+      const occurrenceId = message.attributes!.occurrenceId!;
+      const morning = message.attributes!.kind === "morning";
+      database.database
+        .prepare(
+          "UPDATE heartbeat_occurrences SET status = ?, notify = ?, message = ?, reason = 'nothing_useful' WHERE occurrence_id = ?",
+        )
+        .run(
+          morning ? "ready" : "silent",
+          morning ? 1 : 0,
+          morning ? "Morning — what should we work on?" : null,
+          occurrenceId,
+        );
+      return morning ? "Morning — what should we work on?" : "";
+    });
+    const agent = heartbeatRuntime(deliver, () => busy);
     const scheduler = new Scheduler(
       database,
       config,
@@ -66,7 +87,7 @@ describe("heartbeat execution", () => {
       "Morning — what should we work on?",
       "heartbeat:heartbeat:2026-08-13:09:00",
     );
-    expect(agent.deliver).toHaveBeenCalledTimes(2);
+    expect(deliver).toHaveBeenCalledTimes(2);
     database.close();
   });
 
@@ -93,7 +114,7 @@ describe("heartbeat execution", () => {
     const scheduler = new Scheduler(
       database,
       config,
-      { isBusy: () => false, deliver } as unknown as StanAgentRuntime,
+      heartbeatRuntime(deliver),
       { sendOwner } as unknown as DeliveryService,
       new AutomationStore(database),
       pino({ level: "silent" }),
@@ -149,7 +170,7 @@ describe("heartbeat execution", () => {
     const scheduler = new Scheduler(
       database,
       config,
-      { isBusy: () => false, deliver } as unknown as StanAgentRuntime,
+      heartbeatRuntime(deliver),
       { sendOwner: vi.fn() } as unknown as DeliveryService,
       new AutomationStore(database),
       pino({ level: "silent" }),
@@ -184,8 +205,8 @@ describe("heartbeat execution", () => {
     database.migrate();
     database.database
       .prepare(
-        `INSERT INTO heartbeat_occurrences(occurrence_id, local_date, scheduled_for, kind, status, lease_until, created_at, updated_at)
-         VALUES (?, ?, ?, 'regular', 'running', ?, ?, ?)`,
+        `INSERT INTO heartbeat_occurrences(occurrence_id, local_date, scheduled_for, kind, status, lease_until, flue_submission_id, created_at, updated_at)
+         VALUES (?, ?, ?, 'regular', 'running', ?, 'submission-existing', ?, ?)`,
       )
       .run(
         "heartbeat:2026-08-13:11:59",
@@ -195,20 +216,19 @@ describe("heartbeat execution", () => {
         "2026-08-13T06:59:00Z",
         "2026-08-13T06:59:00Z",
       );
-    const deliver = vi.fn(
-      async (_id: string, message: { attributes?: Record<string, string> }) => {
-        database.database
-          .prepare(
-            "UPDATE heartbeat_occurrences SET status = 'silent', notify = 0 WHERE occurrence_id = ?",
-          )
-          .run(message.attributes!.occurrenceId!);
-        return "";
-      },
-    );
+    const dispatch = vi.fn();
+    const read = vi.fn(async () => {
+      database.database
+        .prepare(
+          "UPDATE heartbeat_occurrences SET status = 'silent', notify = 0 WHERE occurrence_id = ?",
+        )
+        .run("heartbeat:2026-08-13:11:59");
+      return "";
+    });
     const scheduler = new Scheduler(
       database,
       config,
-      { isBusy: () => false, deliver } as unknown as StanAgentRuntime,
+      { isBusy: () => false, dispatch, read } as unknown as StanAgentRuntime,
       { sendOwner: vi.fn() } as unknown as DeliveryService,
       new AutomationStore(database),
       pino({ level: "silent" }),
@@ -216,7 +236,11 @@ describe("heartbeat execution", () => {
 
     await scheduler.tick(Temporal.Instant.from("2026-08-13T07:00:00Z"));
 
-    expect(deliver).toHaveBeenCalledOnce();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(read).toHaveBeenCalledWith(
+      "stan-owner-2026-08-13",
+      "submission-existing",
+    );
     expect(
       database.database
         .prepare("SELECT status, next_retry_at FROM heartbeat_occurrences")
@@ -250,7 +274,7 @@ describe("heartbeat execution", () => {
     const scheduler = new Scheduler(
       database,
       config,
-      { isBusy: () => false, deliver } as unknown as StanAgentRuntime,
+      heartbeatRuntime(deliver),
       { sendOwner: vi.fn() } as unknown as DeliveryService,
       new AutomationStore(database),
       pino({ level: "silent" }),

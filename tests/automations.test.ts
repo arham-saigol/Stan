@@ -237,6 +237,61 @@ describe("declarative automations", () => {
     database.close();
   });
 
+  it("prunes only completed automation runs beyond retention", () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const store = new AutomationStore(database);
+    const automation = store.create({
+      name: "retained-check",
+      schedule: { type: "cron", expression: "0 * * * *" },
+      instruction: "Check once",
+      deliveryMode: "silent",
+      creatorMessageId: "owner-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const insert = database.database.prepare(
+      `INSERT INTO automation_runs(occurrence_id, automation_id, scheduled_for, status, result, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'large result', ?, ?)`,
+    );
+    insert.run(
+      "old-completed",
+      automation.id,
+      "2026-06-01T00:00:00Z",
+      "completed",
+      "2026-06-01T00:00:00Z",
+      "2026-06-01T00:00:00Z",
+    );
+    insert.run(
+      "old-failed",
+      automation.id,
+      "2026-06-01T00:00:00Z",
+      "failed",
+      "2026-06-01T00:00:00Z",
+      "2026-06-01T00:00:00Z",
+    );
+    insert.run(
+      "recent-completed",
+      automation.id,
+      "2026-08-12T00:00:00Z",
+      "completed",
+      "2026-08-12T00:00:00Z",
+      "2026-08-12T00:00:00Z",
+    );
+
+    expect(store.pruneCompleted(new Date("2026-07-01T00:00:00Z"))).toBe(1);
+    expect(
+      database.database
+        .prepare(
+          "SELECT occurrence_id FROM automation_runs ORDER BY occurrence_id",
+        )
+        .all(),
+    ).toEqual([
+      { occurrence_id: "old-failed" },
+      { occurrence_id: "recent-completed" },
+    ]);
+    database.close();
+  });
+
   it("recovers an expired run through its idempotent Flue submission", async () => {
     const root = await mkdtemp(join(tmpdir(), "stan-automation-recovery-"));
     const config = new ConfigStore(root);

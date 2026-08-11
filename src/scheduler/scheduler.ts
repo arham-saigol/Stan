@@ -70,6 +70,9 @@ export class Scheduler {
     const config = this.config.read();
     await this.runHeartbeat(config, now);
     await this.runAutomations(now);
+    this.automations.pruneCompleted(
+      new Date(now.epochMilliseconds - 30 * 24 * 60 * 60_000),
+    );
   }
 
   private async runHeartbeat(
@@ -89,7 +92,7 @@ export class Scheduler {
     );
     const failedOccurrence = this.database.database
       .prepare(
-        `SELECT occurrence_id, local_date, scheduled_for, kind
+        `SELECT occurrence_id, local_date, scheduled_for, kind, flue_submission_id
          FROM heartbeat_occurrences
          WHERE status = 'failed' AND notify IS NOT 1 AND attempts < 3
            AND next_retry_at IS NOT NULL AND next_retry_at <= ?
@@ -101,6 +104,7 @@ export class Scheduler {
           local_date: string;
           scheduled_for: string;
           kind: "morning" | "regular";
+          flue_submission_id: string | null;
         }
       | undefined;
     const occurrence = failedOccurrence
@@ -111,6 +115,7 @@ export class Scheduler {
           localTime: failedOccurrence.occurrence_id.split(":").at(-1)!,
           scheduledFor: failedOccurrence.scheduled_for,
           kind: failedOccurrence.kind,
+          submissionId: failedOccurrence.flue_submission_id,
         }
       : dueHeartbeat(now, config.heartbeat, {
           completedOccurrenceIds: completed,
@@ -172,29 +177,46 @@ export class Scheduler {
       )
       .run(timestamp, occurrence.id);
     try {
-      if (this.prepareHeartbeat) {
-        try {
-          await this.prepareHeartbeat();
-        } catch (error) {
-          this.logger.warn(
-            { occurrenceId: occurrence.id, error: safeError(error) },
-            "Optional heartbeat research preparation failed",
-          );
+      let submissionId =
+        "submissionId" in occurrence ? occurrence.submissionId : null;
+      if (!submissionId) {
+        if (this.prepareHeartbeat) {
+          try {
+            await this.prepareHeartbeat();
+          } catch (error) {
+            this.logger.warn(
+              { occurrenceId: occurrence.id, error: safeError(error) },
+              "Optional heartbeat research preparation failed",
+            );
+          }
         }
+        submissionId = await this.agent.dispatch(
+          dailySessionId(occurrence.scheduledFor),
+          {
+            kind: "signal",
+            type: "heartbeat",
+            body:
+              occurrence.kind === "morning"
+                ? "Run the morning heartbeat. Always finish with heartbeat_respond and one conversational message."
+                : "Run the regular heartbeat. Finish with heartbeat_respond; stay silent unless one interruption is worthwhile.",
+            attributes: {
+              occurrenceId: occurrence.id,
+              kind: occurrence.kind,
+              scheduledFor: occurrence.scheduledFor,
+            },
+          },
+          `heartbeat:${occurrence.id}`,
+        );
+        this.database.database
+          .prepare(
+            "UPDATE heartbeat_occurrences SET flue_submission_id = ?, updated_at = ? WHERE occurrence_id = ?",
+          )
+          .run(submissionId, now.toString(), occurrence.id);
       }
-      const reply = await this.agent.deliver(dailySessionId(now), {
-        kind: "signal",
-        type: "heartbeat",
-        body:
-          occurrence.kind === "morning"
-            ? "Run the morning heartbeat. Always finish with heartbeat_respond and one conversational message."
-            : "Run the regular heartbeat. Finish with heartbeat_respond; stay silent unless one interruption is worthwhile.",
-        attributes: {
-          occurrenceId: occurrence.id,
-          kind: occurrence.kind,
-          scheduledFor: occurrence.scheduledFor,
-        },
-      });
+      const reply = await this.agent.read(
+        dailySessionId(occurrence.scheduledFor),
+        submissionId,
+      );
       const row = this.database.database
         .prepare(
           "SELECT status, notify, message FROM heartbeat_occurrences WHERE occurrence_id = ?",
