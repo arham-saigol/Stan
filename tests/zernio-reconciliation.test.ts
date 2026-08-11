@@ -602,6 +602,68 @@ describe("ambiguous Zernio operation reconciliation", () => {
     },
   );
 
+  it("keeps an unchanged delete unresolved until bounded polling exhausts", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-delete",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "delete X post z-1",
+      receivedAt: "2026-08-13T00:00:00Z",
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-delete",
+      operation: "delete",
+      targetPostId: "z-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const provider = {
+      verifyPostAccount: vi.fn(async () => true),
+      mutate: vi.fn(async () => {
+        throw new Error("ambiguous delete outcome");
+      }),
+      getPost: vi.fn(async () => ({
+        status: "published" as const,
+        platforms: [
+          {
+            platform: "twitter" as const,
+            status: "published" as const,
+            platformPostId: "x-1",
+            platformPostUrl: "https://x.com/stan/status/x-1",
+          },
+        ],
+      })),
+    };
+    const operation = await new ZernioWriteService(database, provider).execute(
+      { sourceMessageId: "owner-delete", selectedAccountId: "account-1" },
+      { operation: "delete", providerPostId: "z-1" },
+    );
+    setOperationCreatedAt(database, operation.logicalId);
+    const notifications: string[] = [];
+    const sendOwner = vi.fn(async (message: string) => {
+      notifications.push(message);
+      return { messageId: "out-1" };
+    });
+
+    for (const time of [
+      "2026-08-13T00:02:00Z",
+      "2026-08-13T00:07:00Z",
+      "2026-08-13T00:12:00Z",
+    ])
+      await reconcileScheduledPublications(
+        database,
+        provider,
+        { sendOwner } as unknown as DeliveryService,
+        new Date(time),
+      );
+
+    expect(database.getXOperation(operation.logicalId)!.status).toBe("partial");
+    expect(provider.getPost).toHaveBeenCalledTimes(3);
+    expect(sendOwner).toHaveBeenCalledOnce();
+    expect(notifications[0]).not.toContain("verified as published");
+    database.close();
+  });
+
   it("does not treat a scheduled-publication notification outage as provider failure", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

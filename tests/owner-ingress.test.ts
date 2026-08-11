@@ -267,6 +267,36 @@ describe("owner-only ingress", () => {
     expect(read).toHaveBeenCalledOnce();
   });
 
+  it("serializes recovered turns before newly admitted owner messages", async () => {
+    const { ingress, database, deliveries, dispatch, read } = await harness();
+    database.claimInbound({
+      id: "recovered-turn",
+      senderIdentity: ownerJid,
+      body: "older message",
+      receivedAt: "2026-08-13T09:00:00.000Z",
+    });
+    let release!: (value: string) => void;
+    read.mockImplementationOnce(
+      () => new Promise<string>((resolve) => (release = resolve)),
+    );
+
+    const recovery = ingress.reconcilePending();
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    const live = ingress.handle(
+      message({ id: "live-turn", text: "newer message" }),
+    );
+    await Promise.resolve();
+
+    expect(dispatch).toHaveBeenCalledOnce();
+    release("recovered reply");
+    await expect(recovery).resolves.toBe(1);
+    await expect(live).resolves.toEqual({ status: "delivered" });
+    expect(deliveries.map((delivery) => delivery.body)).toEqual([
+      "older message",
+      "newer message",
+    ]);
+  });
+
   it("derives one expiring publish envelope from an explicit owner command", async () => {
     const { ingress, database, deliveries } = await harness();
 

@@ -50,6 +50,7 @@ export class OwnerIngress {
   private readonly read: OwnerRead;
   private readonly send: OwnerSend;
   private readonly processing = new Set<string>();
+  private turnQueue: Promise<void> = Promise.resolve();
 
   constructor(input: {
     database: ApplicationDatabase;
@@ -97,7 +98,7 @@ export class OwnerIngress {
     });
     if (!claimed) return { status: "duplicate" };
 
-    return this.process(message);
+    return this.enqueueProcess(message);
   }
 
   async reconcilePending(limit = 5, now = new Date()): Promise<number> {
@@ -126,7 +127,7 @@ export class OwnerIngress {
         processed += 1;
         continue;
       }
-      await this.process(
+      await this.enqueueProcess(
         {
           id: row.provider_message_id,
           type: "notify",
@@ -145,13 +146,33 @@ export class OwnerIngress {
     return processed;
   }
 
-  private async process(
+  private enqueueProcess(
     message: InboundMessage,
     persistedSessionId?: string,
     persistedSubmissionId?: string,
     now = new Date(),
   ): Promise<{ status: "delivered" | "failed" }> {
     this.processing.add(message.id);
+    return this.enqueue(() =>
+      this.process(message, persistedSessionId, persistedSubmissionId, now),
+    ).finally(() => this.processing.delete(message.id));
+  }
+
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const result = this.turnQueue.then(task, task);
+    this.turnQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private async process(
+    message: InboundMessage,
+    persistedSessionId?: string,
+    persistedSubmissionId?: string,
+    now = new Date(),
+  ): Promise<{ status: "delivered" | "failed" }> {
     try {
       if (!this.database.getAuthorizationForSource(message.id)) {
         const authorization = deriveAuthorization(
@@ -258,8 +279,6 @@ export class OwnerIngress {
     } catch (error) {
       this.database.recordInboundFailure(message.id, safeError(error), now);
       return { status: "failed" };
-    } finally {
-      this.processing.delete(message.id);
     }
   }
 
