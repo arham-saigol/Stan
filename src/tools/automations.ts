@@ -1,6 +1,7 @@
 import { defineTool, type ToolDefinition } from "@flue/runtime";
 import * as v from "valibot";
 import type { AutomationStore } from "../scheduler/automations.ts";
+import type { AutomationAuthorizationOperation } from "../storage/application-db.ts";
 import type { TrustedDeliveryContext } from "./types.ts";
 import { automationMutationPayload } from "../gateway/owner-authorization.ts";
 
@@ -8,18 +9,23 @@ export function automationTools(
   store: AutomationStore,
   trusted: TrustedDeliveryContext,
 ): ToolDefinition[] {
-  const requireOwner = (
-    operation: "create" | "set_enabled" | "delete",
+  const mutate = async <T>(
+    operation: AutomationAuthorizationOperation,
     input: Record<string, unknown>,
-  ) => {
+    mutation: (sourceMessageId: string) => T | Promise<T>,
+  ): Promise<T> => {
     if (trusted.kind !== "owner" || !trusted.sourceMessageId)
       throw new Error("Automation changes require a current owner message");
-    store.consumeAuthorization(
+    const payload = automationMutationPayload(operation, input);
+    const previous = store.beginMutation(
       trusted.sourceMessageId,
       operation,
-      automationMutationPayload(operation, input),
+      payload,
     );
-    return trusted.sourceMessageId;
+    if (previous) return JSON.parse(previous) as T;
+    const result = await mutation(trusted.sourceMessageId);
+    store.finishMutation(trusted.sourceMessageId, operation, payload, result);
+    return result;
   };
   return [
     defineTool({
@@ -47,19 +53,20 @@ export function automationTools(
           throw new Error("A one-shot automation requires an exact time");
         if (data.scheduleType === "cron" && !data.expression)
           throw new Error("A cron automation requires an expression");
-        const creatorMessageId = requireOwner("create", data);
         const schedule =
           data.scheduleType === "once"
             ? { type: "once" as const, at: data.at! }
             : { type: "cron" as const, expression: data.expression! };
         return {
-          output: store.create({
-            name: data.name,
-            schedule,
-            instruction: data.instruction,
-            deliveryMode: data.deliveryMode,
-            creatorMessageId,
-          }),
+          output: await mutate("create", data, (creatorMessageId) =>
+            store.create({
+              name: data.name,
+              schedule,
+              instruction: data.instruction,
+              deliveryMode: data.deliveryMode,
+              creatorMessageId,
+            }),
+          ),
         };
       },
     }),
@@ -69,8 +76,11 @@ export function automationTools(
         "Pause or enable only after an exact `pause automation <id>` or `enable automation <id>` owner command.",
       input: v.object({ id: v.string(), enabled: v.boolean() }),
       async run({ data }) {
-        requireOwner("set_enabled", data);
-        return { output: store.setEnabled(data.id, data.enabled) };
+        return {
+          output: await mutate("set_enabled", data, () =>
+            store.setEnabled(data.id, data.enabled),
+          ),
+        };
       },
     }),
     defineTool({
@@ -79,8 +89,11 @@ export function automationTools(
         "Delete only after an exact `delete automation <id>` owner command.",
       input: v.object({ id: v.string() }),
       async run({ data }) {
-        requireOwner("delete", data);
-        return { output: { deleted: store.delete(data.id) } };
+        return {
+          output: await mutate("delete", data, () => ({
+            deleted: store.delete(data.id),
+          })),
+        };
       },
     }),
   ];

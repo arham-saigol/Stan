@@ -167,7 +167,9 @@ describe("trusted tool boundaries", () => {
     await expect((tool.run as Run)(input)).resolves.toMatchObject({
       output: { name: "explicit reminder" },
     });
-    await expect((tool.run as Run)(input)).rejects.toThrow(/authorization/i);
+    await expect((tool.run as Run)(input)).resolves.toMatchObject({
+      output: { name: "explicit reminder" },
+    });
     database.close();
   });
 

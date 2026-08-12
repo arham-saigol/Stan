@@ -98,7 +98,8 @@ CREATE TABLE IF NOT EXISTS automation_authorizations (
   operation TEXT NOT NULL CHECK (operation IN ('create', 'set_enabled', 'delete')),
   payload_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  consumed_at TEXT
+  consumed_at TEXT,
+  result_json TEXT
 ) STRICT;
 CREATE TABLE IF NOT EXISTS workspace_authorizations (
   source_message_id TEXT PRIMARY KEY REFERENCES inbound_messages(provider_message_id),
@@ -355,6 +356,12 @@ export class ApplicationDatabase {
         this.database,
         "automation_authorizations",
         "payload_json",
+        "TEXT",
+      );
+      addColumnIfMissing(
+        this.database,
+        "automation_authorizations",
+        "result_json",
         "TEXT",
       );
       addColumnIfMissing(
@@ -730,30 +737,59 @@ export class ApplicationDatabase {
       .run(sourceMessageId, operation, payloadJson, now.toISOString());
   }
 
-  consumeAutomationAuthorization(
+  beginAutomationMutation(
     sourceMessageId: string,
     operation: AutomationAuthorizationOperation,
     payloadJson: string,
-  ): void {
+  ): string | undefined {
     const now = new Date();
+    return this.transaction(() => {
+      const existing = this.database
+        .prepare(
+          `SELECT consumed_at, result_json FROM automation_authorizations
+           WHERE source_message_id = ? AND operation = ? AND payload_json = ?`,
+        )
+        .get(sourceMessageId, operation, payloadJson) as
+        | { consumed_at: string | null; result_json: string | null }
+        | undefined;
+      if (existing?.result_json) return existing.result_json;
+      if (existing?.consumed_at) return undefined;
+      const result = this.database
+        .prepare(
+          `UPDATE automation_authorizations SET consumed_at = ?
+           WHERE source_message_id = ? AND operation = ? AND payload_json = ?
+             AND consumed_at IS NULL AND created_at > ?`,
+        )
+        .run(
+          now.toISOString(),
+          sourceMessageId,
+          operation,
+          payloadJson,
+          new Date(now.getTime() - 15 * 60_000).toISOString(),
+        );
+      if (result.changes !== 1)
+        throw new Error(
+          `Current owner authorization is required to ${operation.replace("_", " ")} an automation`,
+        );
+      return undefined;
+    });
+  }
+
+  finishAutomationMutation(
+    sourceMessageId: string,
+    operation: AutomationAuthorizationOperation,
+    payloadJson: string,
+    resultJson: string,
+  ): void {
     const result = this.database
       .prepare(
-        `UPDATE automation_authorizations SET consumed_at = ?
-         WHERE source_message_id = ? AND operation = ? AND payload_json = ?
-           AND consumed_at IS NULL AND created_at > ?`,
+        `UPDATE automation_authorizations SET result_json = ? WHERE source_message_id = ?
+         AND operation = ? AND payload_json = ? AND consumed_at IS NOT NULL
+         AND (result_json IS NULL OR result_json = ?)`,
       )
-      .run(
-        now.toISOString(),
-        sourceMessageId,
-        operation,
-        payloadJson,
-        new Date(now.getTime() - 15 * 60_000).toISOString(),
-      );
-    if (result.changes !== 1) {
-      throw new Error(
-        `Current owner authorization is required to ${operation.replace("_", " ")} an automation`,
-      );
-    }
+      .run(resultJson, sourceMessageId, operation, payloadJson, resultJson);
+    if (result.changes !== 1)
+      throw new Error("Automation mutation outcome could not be recorded");
   }
 
   createWorkspaceAuthorization(

@@ -295,6 +295,27 @@ async function deliverTerminalNotification(
       .run(row.logical_operation_id);
   } catch {
     const attempts = row.notification_attempts + 1;
+    if (attempts >= 3) {
+      database.transaction(() => {
+        database.database
+          .prepare(
+            `UPDATE x_operations SET notification_message = ?, notification_attempts = ?,
+             next_retry_at = NULL, updated_at = ? WHERE logical_id = ?`,
+          )
+          .run(
+            row.notification_message,
+            attempts,
+            now.toISOString(),
+            row.logical_operation_id,
+          );
+        database.database
+          .prepare(
+            "DELETE FROM scheduled_publications WHERE logical_operation_id = ?",
+          )
+          .run(row.logical_operation_id);
+      });
+      return;
+    }
     database.database
       .prepare(
         `UPDATE scheduled_publications SET notification_attempts = ?, next_poll_at = ?
@@ -302,11 +323,7 @@ async function deliverTerminalNotification(
       )
       .run(
         attempts,
-        attempts >= 3
-          ? now.toISOString()
-          : new Date(
-              now.getTime() + 60_000 * 2 ** (attempts - 1),
-            ).toISOString(),
+        new Date(now.getTime() + 60_000 * 2 ** (attempts - 1)).toISOString(),
         row.logical_operation_id,
       );
   }

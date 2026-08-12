@@ -35,7 +35,9 @@ export function heartbeatScheduleForDate(
   const occurrences: HeartbeatOccurrence[] = [];
   for (
     let at = start;
-    Temporal.ZonedDateTime.compare(at, end) <= 0;
+    startMinutes === endMinutes
+      ? Temporal.ZonedDateTime.compare(at, end) < 0
+      : Temporal.ZonedDateTime.compare(at, end) <= 0;
     at = at.add({ minutes: config.intervalMinutes })
   ) {
     const localTime = `${pad(at.hour)}:${pad(at.minute)}`;

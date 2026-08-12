@@ -974,18 +974,16 @@ describe("ambiguous Zernio operation reconciliation", () => {
 
     expect(provider.getPost).toHaveBeenCalledOnce();
     expect(sendOwner).toHaveBeenCalledTimes(3);
-    const notification = database.database
-      .prepare(
-        "SELECT notification_attempts, notification_message FROM scheduled_publications WHERE logical_operation_id = ?",
-      )
-      .get(operation.logicalId) as {
-      notification_attempts: number;
-      notification_message: string;
-    };
-    expect(notification.notification_attempts).toBe(3);
-    expect(notification.notification_message).toContain(
-      "verified as published",
-    );
+    expect(
+      database.database
+        .prepare(
+          "SELECT 1 FROM scheduled_publications WHERE logical_operation_id = ?",
+        )
+        .get(operation.logicalId),
+    ).toBeUndefined();
+    const notification = database.getXOperation(operation.logicalId)!;
+    expect(notification.notificationAttempts).toBe(3);
+    expect(notification.notificationMessage).toContain("verified as published");
     database.close();
   });
 });

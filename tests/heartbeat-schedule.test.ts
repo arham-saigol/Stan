@@ -39,8 +39,8 @@ describe("Pakistan-time heartbeat cadence", () => {
       intervalMinutes: 1440,
     });
 
-    expect(schedule).toHaveLength(2);
-    expect(new Set(schedule.map((occurrence) => occurrence.id)).size).toBe(2);
+    expect(schedule).toHaveLength(1);
+    expect(schedule[0]).toMatchObject({ kind: "morning", localTime: "09:00" });
   });
 
   it("runs no heartbeat from 02:00 until 09:00", () => {

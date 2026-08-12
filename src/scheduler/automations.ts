@@ -36,15 +36,29 @@ export interface PendingAutomationNotification {
 export class AutomationStore {
   constructor(private readonly application: ApplicationDatabase) {}
 
-  consumeAuthorization(
+  beginMutation(
     sourceMessageId: string,
     operation: AutomationAuthorizationOperation,
     payloadJson: string,
-  ): void {
-    this.application.consumeAutomationAuthorization(
+  ): string | undefined {
+    return this.application.beginAutomationMutation(
       sourceMessageId,
       operation,
       payloadJson,
+    );
+  }
+
+  finishMutation(
+    sourceMessageId: string,
+    operation: AutomationAuthorizationOperation,
+    payloadJson: string,
+    result: unknown,
+  ): void {
+    this.application.finishAutomationMutation(
+      sourceMessageId,
+      operation,
+      payloadJson,
+      JSON.stringify(result),
     );
   }
 
@@ -56,6 +70,14 @@ export class AutomationStore {
     creatorMessageId: string;
     now?: Date;
   }): Automation {
+    const existing = this.application.database
+      .prepare(
+        "SELECT * FROM automations WHERE creator_message_id = ? AND deleted_at IS NULL",
+      )
+      .get(input.creatorMessageId) as
+      | Record<string, string | number | null>
+      | undefined;
+    if (existing) return mapAutomation(existing);
     const now = input.now ?? new Date();
     const count = (
       this.application.database
