@@ -110,8 +110,8 @@ export async function setupCommand(root: string): Promise<void> {
         choices,
       });
     }
-    const model = await authenticateCodexAndSelect(root);
     codexChanged = true;
+    const model = await authenticateCodexAndSelect(root);
     const config =
       existingConfig ??
       createDefaultConfig({
@@ -169,7 +169,7 @@ export async function setupCommand(root: string): Promise<void> {
   } catch (error) {
     if (configWritten && !credentialsSaved && existingConfig)
       await new ConfigStore(root).write(existingConfig);
-    if (codexChanged) await restoreCodex();
+    if (codexChanged && !credentialsSaved) await restoreCodex();
     throw error;
   } finally {
     database.close();

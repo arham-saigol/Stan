@@ -182,19 +182,23 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
     whatsapp.start();
 
     let stopping = false;
-    const shutdown = async () => {
-      if (stopping) return;
+    let shutdownPromise: Promise<void> | undefined;
+    const shutdown = () => {
+      if (shutdownPromise) return shutdownPromise;
       stopping = true;
-      logger.info("Graceful shutdown started");
-      whatsapp.quiesce();
-      await scheduler.stop();
-      await whatsapp.drain();
-      await agent.stop();
-      await whatsapp.stop();
-      database.close();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      await releaseLock();
-      await logger.close();
+      shutdownPromise = (async () => {
+        logger.info("Graceful shutdown started");
+        whatsapp.quiesce();
+        await scheduler.stop();
+        await whatsapp.drain();
+        await agent.stop();
+        await whatsapp.stop();
+        database.close();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await releaseLock();
+        await logger.close();
+      })();
+      return shutdownPromise;
     };
     const app = controlApp(
       credentials.controlToken,
