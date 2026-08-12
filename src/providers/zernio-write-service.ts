@@ -103,7 +103,10 @@ export class ZernioWriteService {
     if (existing) {
       recovered = begin();
       if (isTerminal(recovered.status)) return recovered;
-      if (recovered.providerId) {
+      if (
+        recovered.providerId &&
+        recovered.error !== "Provider call has not completed"
+      ) {
         trackProviderPoll(this.database, recovered, new Date());
         return recovered;
       }
@@ -120,8 +123,8 @@ export class ZernioWriteService {
         return recovered;
       }
     }
-    let resolvedTargetPostId = targetPostId;
-    if ("providerPostId" in request && targetPostId) {
+    let resolvedTargetPostId = recovered?.providerId ?? targetPostId;
+    if ("providerPostId" in request && targetPostId && !recovered?.providerId) {
       if (this.provider.resolveProviderPostId) {
         resolvedTargetPostId = await this.provider.resolveProviderPostId(
           targetPostId,
@@ -144,15 +147,6 @@ export class ZernioWriteService {
           );
         }
       }
-    }
-    if (recovered && resolvedTargetPostId) {
-      recovered = this.database.updateXOperation(recovered.logicalId, {
-        status: "publishing",
-        providerId: resolvedTargetPostId,
-        error: "Provider call outcome was not recorded before recovery",
-      });
-      trackProviderPoll(this.database, recovered, new Date());
-      return recovered;
     }
     if (
       request.operation === "schedule" &&

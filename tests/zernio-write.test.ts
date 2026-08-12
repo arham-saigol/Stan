@@ -364,6 +364,55 @@ describe("Zernio public-write boundary", () => {
     expect(hasTrackedZernioWrites(root)).toBe(true);
   });
 
+  it("replays a destructive call not yet attempted after persisting its target", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-delete-pre-call",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "delete X post 1900123456789",
+      receivedAt: new Date().toISOString(),
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-delete-pre-call",
+      operation: "delete",
+      targetPostId: "1900123456789",
+    });
+    const resolveProviderPostId = vi.fn(async () => "z-1");
+    const mutate = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("daemon exited before provider call"))
+      .mockResolvedValueOnce({ status: "cancelled" as const });
+    const service = new ZernioWriteService(database, {
+      mutate,
+      resolveProviderPostId,
+    });
+    const context = {
+      sourceMessageId: "owner-delete-pre-call",
+      selectedAccountId: "account-1",
+    };
+    const request = {
+      operation: "delete" as const,
+      providerPostId: "1900123456789",
+    };
+
+    const interrupted = await service.execute(context, request);
+    database.database
+      .prepare("UPDATE x_operations SET error = ? WHERE logical_id = ?")
+      .run("Provider call has not completed", interrupted.logicalId);
+    const replayed = await service.execute(context, request);
+
+    expect(replayed).toMatchObject({ status: "cancelled", providerId: "z-1" });
+    expect(resolveProviderPostId).toHaveBeenCalledOnce();
+    expect(mutate).toHaveBeenCalledTimes(2);
+    expect(mutate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        request: { operation: "delete", providerPostId: "z-1" },
+      }),
+    );
+    database.close();
+  });
+
   it("returns a persisted deletion without resolving the removed target again", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

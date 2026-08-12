@@ -20,7 +20,7 @@ interface ZernioStatusProvider {
 export async function reconcileScheduledPublications(
   database: ApplicationDatabase,
   provider: ZernioStatusProvider,
-  delivery: DeliveryService,
+  delivery: DeliveryService | undefined,
   now = new Date(),
 ): Promise<number> {
   const rows = database.database
@@ -368,7 +368,7 @@ function queueTerminalNotification(
 
 async function deliverTerminalNotification(
   database: ApplicationDatabase,
-  delivery: DeliveryService,
+  delivery: DeliveryService | undefined,
   row: {
     logical_operation_id: string;
     last_status: string;
@@ -377,6 +377,7 @@ async function deliverTerminalNotification(
   },
   now: Date,
 ): Promise<void> {
+  if (!delivery) return;
   try {
     await delivery.sendOwner(
       row.notification_message,

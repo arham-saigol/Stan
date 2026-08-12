@@ -16,7 +16,7 @@ import {
 export async function reconcilePendingXOperations(
   database: ApplicationDatabase,
   provider: ZernioMutationProvider,
-  delivery: DeliveryService,
+  delivery: DeliveryService | undefined,
   now = new Date(),
 ): Promise<number> {
   const rows = database.database
@@ -122,7 +122,7 @@ export async function reconcilePendingXOperations(
 
 async function queueAndDeliverUnknownResult(
   database: ApplicationDatabase,
-  delivery: DeliveryService,
+  delivery: DeliveryService | undefined,
   operation: XOperation,
   now: Date,
 ): Promise<void> {
@@ -134,7 +134,7 @@ async function queueAndDeliverUnknownResult(
 
 async function deliverUnknownResult(
   database: ApplicationDatabase,
-  delivery: DeliveryService,
+  delivery: DeliveryService | undefined,
   operation: XOperation,
   now: Date,
 ): Promise<void> {
@@ -146,7 +146,7 @@ async function deliverUnknownResult(
 
 async function deliverTerminalResult(
   database: ApplicationDatabase,
-  delivery: DeliveryService,
+  delivery: DeliveryService | undefined,
   operation: XOperation,
   now: Date,
 ): Promise<void> {
@@ -161,7 +161,7 @@ async function deliverTerminalResult(
 
 async function queueAndDeliverResult(
   database: ApplicationDatabase,
-  delivery: DeliveryService,
+  delivery: DeliveryService | undefined,
   operation: XOperation,
   message: string,
   now: Date,
@@ -182,10 +182,11 @@ async function queueAndDeliverResult(
 
 async function deliverQueuedResult(
   database: ApplicationDatabase,
-  delivery: DeliveryService,
+  delivery: DeliveryService | undefined,
   operation: XOperation,
   now: Date,
 ): Promise<void> {
+  if (!delivery) return;
   try {
     await delivery.sendOwner(
       operation.notificationMessage!,

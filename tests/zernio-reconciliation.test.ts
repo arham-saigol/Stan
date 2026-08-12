@@ -887,7 +887,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.close();
   });
 
-  it("surfaces provider drift from the owner-authorized schedule", async () => {
+  it("cancels provider drift while owner delivery is unavailable", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
     database.claimInbound({
@@ -934,12 +934,10 @@ describe("ambiguous Zernio operation reconciliation", () => {
         "UPDATE scheduled_publications SET next_poll_at = ? WHERE logical_operation_id = ?",
       )
       .run("2026-08-13T00:02:00.000Z", operation.logicalId);
-    const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
-
     await reconcileScheduledPublications(
       database,
       provider,
-      { sendOwner } as unknown as DeliveryService,
+      undefined,
       new Date("2026-08-13T00:02:00Z"),
     );
 
@@ -951,7 +949,13 @@ describe("ambiguous Zernio operation reconciliation", () => {
         request: { operation: "cancel", providerPostId: "z-1" },
       }),
     );
-    expect(sendOwner).toHaveBeenCalledOnce();
+    expect(
+      database.database
+        .prepare(
+          "SELECT notification_attempts FROM scheduled_publications WHERE logical_operation_id = ?",
+        )
+        .get(operation.logicalId),
+    ).toEqual({ notification_attempts: 0 });
     database.close();
   });
 

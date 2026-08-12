@@ -155,6 +155,16 @@ describe("owner X authorization classification", () => {
         'edit workspace: {"file":"secrets","operation":"append","text":"oops"}',
       ),
     ).toBeUndefined();
+    expect(
+      deriveWorkspaceAuthorization(
+        'edit workspace: {"file":"goals","operation":"append","text":"Ship Stan","dryRun":true}',
+      ),
+    ).toBeUndefined();
+    expect(
+      deriveWorkspaceAuthorization(
+        'edit workspace: {"file":"goals","operation":"append","oldText":"old","text":"new"}',
+      ),
+    ).toBeUndefined();
     expect(deriveWorkspaceAuthorization("Update our goals")).toBeUndefined();
   });
 

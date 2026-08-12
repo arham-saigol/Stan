@@ -252,7 +252,12 @@ export function workspaceMutationPayload(
     "voice_profile",
     "voice_examples",
   ]);
+  const allowedKeys =
+    input.operation === "replace"
+      ? ["file", "operation", "oldText", "text"]
+      : ["file", "operation", "text"];
   if (
+    Object.keys(input).some((key) => !allowedKeys.includes(key)) ||
     typeof input.file !== "string" ||
     !files.has(input.file) ||
     (input.operation !== "replace" && input.operation !== "append") ||
