@@ -102,7 +102,12 @@ export function hasTrackedZernioWrites(root: string): boolean {
   });
   try {
     return Boolean(
-      database.prepare("SELECT 1 FROM scheduled_publications LIMIT 1").get(),
+      database
+        .prepare(
+          `SELECT 1 FROM scheduled_publications
+           UNION ALL SELECT 1 FROM x_operations WHERE next_retry_at IS NOT NULL LIMIT 1`,
+        )
+        .get(),
     );
   } finally {
     database.close();

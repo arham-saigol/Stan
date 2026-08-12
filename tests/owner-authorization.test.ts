@@ -161,6 +161,14 @@ describe("owner X authorization classification", () => {
     expect(deriveMemoryAuthorization("What do you remember?")).toBeUndefined();
   });
 
+  it("does not derive an X write from an automation confirmation", () => {
+    expect(
+      deriveAuthorizationOperation(
+        'schedule automation: {"name":"x post research","at":"2099-08-13T04:00:00Z"}',
+      ),
+    ).toBeUndefined();
+  });
+
   it("binds heartbeat settings to an exact validated patch", () => {
     expect(
       deriveHeartbeatSettingsAuthorization(

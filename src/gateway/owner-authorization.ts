@@ -41,6 +41,10 @@ export function deriveAuthorizationOperation(
   text: string,
 ): AuthorizationOperation | undefined {
   const normalized = text.trim().replace(prefixes, "");
+  if (
+    /^(?:create|schedule|pause|enable|delete)\s+automation\b/i.test(normalized)
+  )
+    return undefined;
   const match = command.exec(normalized);
   if (!match) {
     return /^save\s+(?:this|that|it)?\s*(?:as\s+)?(?:an?\s+)?(?:x\s+)?draft\b/i.test(

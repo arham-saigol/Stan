@@ -316,6 +316,13 @@ describe("Zernio public-write boundary", () => {
         request: { operation: "delete", providerPostId: "z-1" },
       }),
     );
+    expect(hasTrackedZernioWrites(root)).toBe(true);
+    database.database
+      .prepare(
+        "DELETE FROM scheduled_publications WHERE logical_operation_id = ?",
+      )
+      .run(result.logicalId);
+    database.scheduleXOperationRetry(result.logicalId, "provider timeout");
     database.close();
     expect(hasTrackedZernioWrites(root)).toBe(true);
   });
