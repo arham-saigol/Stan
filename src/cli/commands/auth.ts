@@ -58,7 +58,9 @@ export async function authCommand(root: string): Promise<void> {
   }
 }
 
-async function snapshotCodexState(root: string): Promise<() => Promise<void>> {
+export async function snapshotCodexState(
+  root: string,
+): Promise<() => Promise<void>> {
   const paths = statePaths(root);
   const files = [
     paths.codexAuth,

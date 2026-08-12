@@ -44,7 +44,21 @@ export async function authenticateWhatsApp(
     await new Promise<void>((resolve, reject) => {
       let requestedCode = false;
       let settled = false;
+      let reconnectTimer: NodeJS.Timeout | undefined;
+      const fail = async (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = undefined;
+        await socket?.end(undefined).catch(() => undefined);
+        reject(
+          error instanceof Error
+            ? error
+            : new Error("WhatsApp authentication failed"),
+        );
+      };
       const connect = () => {
+        if (settled) return;
         const auth = createSqliteAuthState(temporary);
         socket = makeWASocket({
           auth: auth.state,
@@ -83,8 +97,7 @@ export async function authenticateWhatsApp(
                       `${config.ownerPhone.slice(1)}@s.whatsapp.net`,
                   )
                 ) {
-                  settled = true;
-                  reject(
+                  await fail(
                     new Error(
                       "Stan must use a dedicated WhatsApp account separate from the owner number",
                     ),
@@ -96,8 +109,7 @@ export async function authenticateWhatsApp(
                 );
                 const owner = owners?.[0];
                 if (!owner?.exists) {
-                  settled = true;
-                  reject(
+                  await fail(
                     new Error(
                       "The configured owner number is not available on WhatsApp",
                     ),
@@ -110,17 +122,17 @@ export async function authenticateWhatsApp(
               if (connection === "close" && !settled) {
                 const code = statusCode(lastDisconnect?.error);
                 if (code === DisconnectReason.loggedOut) {
-                  settled = true;
-                  reject(new Error("WhatsApp rejected authentication"));
+                  await fail(new Error("WhatsApp rejected authentication"));
                 } else {
                   await socket?.end(undefined);
-                  setTimeout(
+                  reconnectTimer = setTimeout(
                     connect,
                     code === DisconnectReason.restartRequired ? 0 : 1000,
-                  ).unref();
+                  );
+                  reconnectTimer.unref();
                 }
               }
-            })().catch(reject);
+            })().catch((error: unknown) => void fail(error));
           },
         );
       };

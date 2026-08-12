@@ -11,7 +11,7 @@ import { SupermemoryProvider } from "../../memory/supermemory.ts";
 import { initializeStateRoot, statePaths } from "../../state.ts";
 import { ApplicationDatabase } from "../../storage/application-db.ts";
 import { WorkspaceStore } from "../../workspace/store.ts";
-import { authenticateCodexAndSelect } from "./auth.ts";
+import { authenticateCodexAndSelect, snapshotCodexState } from "./auth.ts";
 import { hasTrackedZernioWrites } from "./apis-auth.ts";
 import {
   getDaemonStatus,
@@ -37,6 +37,8 @@ export async function setupCommand(root: string): Promise<void> {
   let existingConfig: ReturnType<ConfigStore["read"]> | undefined;
   let configWritten = false;
   let credentialsSaved = false;
+  let codexChanged = false;
+  const restoreCodex = await snapshotCodexState(root);
   try {
     console.log(
       "Baileys is unofficial and can break when WhatsApp changes. Use a dedicated number; automation can result in suspension.",
@@ -109,6 +111,7 @@ export async function setupCommand(root: string): Promise<void> {
       });
     }
     const model = await authenticateCodexAndSelect(root);
+    codexChanged = true;
     const config =
       existingConfig ??
       createDefaultConfig({
@@ -166,6 +169,7 @@ export async function setupCommand(root: string): Promise<void> {
   } catch (error) {
     if (configWritten && !credentialsSaved && existingConfig)
       await new ConfigStore(root).write(existingConfig);
+    if (codexChanged) await restoreCodex();
     throw error;
   } finally {
     database.close();
