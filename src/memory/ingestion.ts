@@ -117,7 +117,7 @@ export async function reconcilePendingMemory(
         }
         if (status !== "failed") {
           const attempts = row.attempts + 1;
-          const exhausted = attempts >= 3;
+          const exhausted = attempts >= 720;
           database.database
             .prepare(
               `UPDATE memory_documents SET status = ?, attempts = ?, next_attempt_at = ?,
@@ -130,7 +130,7 @@ export async function reconcilePendingMemory(
                 ? null
                 : new Date(Date.now() + 2 * 60_000).toISOString(),
               exhausted
-                ? "Memory provider did not finish within the retry limit"
+                ? "Memory provider did not finish within the 24-hour polling limit"
                 : null,
               new Date().toISOString(),
               row.custom_id,

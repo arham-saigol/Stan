@@ -10,6 +10,11 @@ import { firstSchedulePoll } from "./zernio-write-service.ts";
 
 interface ZernioStatusProvider {
   getPost(postId: string): Promise<Post>;
+  mutate?(input: {
+    requestId: string;
+    accountId: string;
+    request: { operation: "cancel"; providerPostId: string };
+  }): Promise<{ status: string }>;
 }
 
 export async function reconcileScheduledPublications(
@@ -21,7 +26,7 @@ export async function reconcileScheduledPublications(
   const rows = database.database
     .prepare(
       `SELECT s.logical_operation_id, s.provider_id, s.last_status, s.notified_status, s.poll_count,
-              s.notification_message, s.notification_attempts, x.operation, x.request_json
+              s.notification_message, s.notification_attempts, x.operation, x.request_json, x.account_id
        FROM scheduled_publications s JOIN x_operations x ON x.logical_id = s.logical_operation_id
        WHERE s.next_poll_at <= ? AND s.notification_attempts < 3
        ORDER BY s.next_poll_at LIMIT 10`,
@@ -36,6 +41,7 @@ export async function reconcileScheduledPublications(
     notification_attempts: number;
     operation: string;
     request_json: string;
+    account_id: string;
   }[];
   for (const row of rows) {
     if (row.notification_message) {
@@ -165,6 +171,19 @@ export async function reconcileScheduledPublications(
       observed === "scheduled" &&
       Boolean(post.scheduledFor) &&
       !sameInstant(post.scheduledFor!, expectedSchedule);
+    let driftCancelled = false;
+    if (scheduleMismatch && provider.mutate) {
+      try {
+        const cancellation = await provider.mutate({
+          requestId: `schedule-drift:${row.logical_operation_id}`,
+          accountId: row.account_id,
+          request: { operation: "cancel", providerPostId: row.provider_id },
+        });
+        driftCancelled = cancellation.status === "cancelled";
+      } catch {
+        // Keep monitoring until cancellation can be verified.
+      }
+    }
     const futureSchedule =
       row.operation === "schedule" &&
       observed === "scheduled" &&
@@ -185,10 +204,14 @@ export async function reconcileScheduledPublications(
     if (unexpectedPublication) {
       status = "partial";
       error = `Zernio reported the ${row.operation} target as published`;
-    } else if (scheduleMismatch) {
+    } else if (scheduleMismatch && driftCancelled) {
       status = "partial";
       error =
-        "Zernio scheduled the post outside the exact owner-authorized instant";
+        "Zernio drifted from the owner-authorized instant; the unauthorized schedule was cancelled";
+    } else if (scheduleMismatch) {
+      status = "publishing";
+      error =
+        "Zernio drifted from the owner-authorized instant; cancellation is not yet verified";
     } else if (exhausted) {
       status = "partial";
       error = editMismatch

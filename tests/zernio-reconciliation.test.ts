@@ -803,11 +803,15 @@ describe("ambiguous Zernio operation reconciliation", () => {
       now: new Date("2026-08-13T00:00:00Z"),
     });
     const provider = {
-      mutate: vi.fn(async () => ({
-        status: "scheduled" as const,
-        providerId: "z-1",
-        scheduledFor: "2026-08-14T00:00:00Z",
-      })),
+      mutate: vi.fn(async (input: { request: { operation: string } }) =>
+        input.request.operation === "cancel"
+          ? { status: "cancelled" as const }
+          : {
+              status: "scheduled" as const,
+              providerId: "z-1",
+              scheduledFor: "2026-08-14T00:00:00Z",
+            },
+      ),
       getPost: vi.fn(async () => ({
         status: "scheduled" as const,
         scheduledFor: "2026-08-14T01:00:00Z",
@@ -841,6 +845,11 @@ describe("ambiguous Zernio operation reconciliation", () => {
     const resolved = database.getXOperation(operation.logicalId)!;
     expect(resolved.status).toBe("partial");
     expect(resolved.error).toMatch(/owner-authorized instant/i);
+    expect(provider.mutate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        request: { operation: "cancel", providerPostId: "z-1" },
+      }),
+    );
     expect(sendOwner).toHaveBeenCalledOnce();
     database.close();
   });

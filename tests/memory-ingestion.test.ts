@@ -88,7 +88,7 @@ describe("durable memory ingestion", () => {
     database.close();
   });
 
-  it("bounds provider documents that remain pending", async () => {
+  it("keeps polling accepted provider documents while bounding them at 24 hours", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
     const memory = {
@@ -97,12 +97,14 @@ describe("durable memory ingestion", () => {
     } as unknown as SupermemoryProvider;
 
     await ingestPendingMemory(database, memory, input);
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      database.database.exec(
-        "UPDATE memory_documents SET next_attempt_at = '2000-01-01T00:00:00Z' WHERE status != 'failed'",
-      );
-      await reconcilePendingMemory(database, memory);
-    }
+    database.database.exec(
+      "UPDATE memory_documents SET attempts = 718, next_attempt_at = '2000-01-01T00:00:00Z'",
+    );
+    await reconcilePendingMemory(database, memory);
+    database.database.exec(
+      "UPDATE memory_documents SET next_attempt_at = '2000-01-01T00:00:00Z' WHERE status != 'failed'",
+    );
+    await reconcilePendingMemory(database, memory);
 
     expect(memory.status).toHaveBeenCalledTimes(2);
     expect(
@@ -111,7 +113,7 @@ describe("durable memory ingestion", () => {
           "SELECT status, attempts, next_attempt_at FROM memory_documents",
         )
         .get(),
-    ).toEqual({ status: "failed", attempts: 3, next_attempt_at: null });
+    ).toEqual({ status: "failed", attempts: 720, next_attempt_at: null });
     database.close();
   });
 
