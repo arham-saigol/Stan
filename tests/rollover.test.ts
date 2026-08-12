@@ -1,6 +1,7 @@
 import pino from "pino";
 import { Temporal } from "@js-temporal/polyfill";
 import { describe, expect, it } from "vitest";
+import type { SupermemoryProvider } from "../src/memory/supermemory.ts";
 import { ApplicationDatabase } from "../src/storage/application-db.ts";
 import { AutomationStore } from "../src/scheduler/automations.ts";
 import { pakistanRoutingDate } from "../src/scheduler/rollover.ts";
@@ -48,7 +49,7 @@ describe("daily session rollover", () => {
     database.close();
   });
 
-  it("waits for the final owner turn and queues its complete transcript in degraded mode", async () => {
+  it("waits for the final owner turn without retaining an offline memory backlog", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
     const logger = pino({ level: "silent" });
@@ -102,15 +103,8 @@ describe("daily session rollover", () => {
         .get(),
     ).toEqual({ state: "closed", transcript_complete: 1 });
     expect(
-      database.database
-        .prepare(
-          "SELECT status, content FROM memory_documents WHERE custom_id = 'stan-session-2026-08-13'",
-        )
-        .get(),
-    ).toEqual({
-      status: "pending",
-      content: "owner: publish this\nowner quoted: The exact post\nstan: done",
-    });
+      database.database.prepare("SELECT 1 FROM memory_documents").get(),
+    ).toBeUndefined();
     database.close();
   });
 
@@ -142,7 +136,9 @@ describe("daily session rollover", () => {
     await expect(
       repairDailyRollover(
         database,
-        undefined,
+        {
+          ingestSession: async () => ({ id: "unused", status: "done" }),
+        } as unknown as SupermemoryProvider,
         logger,
         Temporal.Instant.from("2026-08-13T19:02:00Z"),
       ),
@@ -243,12 +239,8 @@ describe("daily session rollover", () => {
       Temporal.Instant.from("2026-08-13T19:02:30Z"),
     );
     expect(
-      database.database
-        .prepare(
-          "SELECT content FROM memory_documents WHERE custom_id = 'stan-session-2026-08-13'",
-        )
-        .get(),
-    ).toEqual({ content: "stan heartbeat (regular): nothing useful" });
+      database.database.prepare("SELECT 1 FROM memory_documents").get(),
+    ).toBeUndefined();
     database.close();
   });
 
@@ -283,14 +275,8 @@ describe("daily session rollover", () => {
     );
 
     expect(
-      database.database
-        .prepare(
-          "SELECT content FROM memory_documents WHERE custom_id = 'stan-session-2026-08-13'",
-        )
-        .get(),
-    ).toEqual({
-      content: "stan heartbeat (regular): A useful proactive update",
-    });
+      database.database.prepare("SELECT 1 FROM memory_documents").get(),
+    ).toBeUndefined();
     database.close();
   });
 

@@ -45,7 +45,8 @@ export async function repairDailyRollover(
       complete: true,
     };
     database.transaction(() => {
-      if (transcript.trim()) queuePendingMemory(database, memoryInput);
+      if (transcript.trim() && memory)
+        queuePendingMemory(database, memoryInput);
       database.database
         .prepare(
           `UPDATE daily_sessions SET state = 'closed', closed_at = ?, transcript_complete = 1

@@ -24,6 +24,7 @@ export async function apisAuthCommand(root: string): Promise<void> {
   const store = new CredentialStore(root);
   const existingCredentials = store.tryRead();
   const configStore = new ConfigStore(root);
+  const existingConfig = configStore.read();
   console.log("Existing credentials:", store.masked());
   const updates: Partial<Record<ApiCredentialName, string | undefined>> = {};
   for (const [name, message] of prompts) {
@@ -47,7 +48,7 @@ export async function apisAuthCommand(root: string): Promise<void> {
         name: account.username ?? account.id!,
       }));
     if (!choices.length) throw new Error("Zernio has no connected X account");
-    const current = configStore.read().selectedXAccountId;
+    const current = existingConfig.selectedXAccountId;
     selectedXAccountId = choices.some((choice) => choice.value === current)
       ? current
       : await select({ message: "Bound X account", choices });
@@ -64,6 +65,8 @@ export async function apisAuthCommand(root: string): Promise<void> {
     ? Boolean(await getDaemonStatus(root))
     : false;
   const shouldRestart = daemonWasRunning || daemonIsRunning;
+  let configChanged = false;
+  let credentialsSaved = false;
   try {
     if (credentialsChanged && shouldRestart) await stopService(root);
     if (
@@ -80,14 +83,18 @@ export async function apisAuthCommand(root: string): Promise<void> {
         ...config,
         selectedXAccountId,
       }));
+      configChanged = true;
     }
     await store.update(updates);
+    credentialsSaved = true;
     console.log("API credentials validated where possible and saved.");
     if (credentialsChanged && shouldRestart) {
       await startService(root);
       console.log("Stan restarted with the updated provider credentials.");
     }
   } catch (error) {
+    if (configChanged && !credentialsSaved)
+      await configStore.write(existingConfig);
     if (credentialsChanged && shouldRestart)
       await startService(root).catch(() => undefined);
     throw error;
