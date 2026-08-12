@@ -26,7 +26,8 @@ export async function reconcileScheduledPublications(
   const rows = database.database
     .prepare(
       `SELECT s.logical_operation_id, s.provider_id, s.last_status, s.notified_status, s.poll_count,
-              s.notification_message, s.notification_attempts, x.operation, x.request_json, x.account_id
+              s.notification_message, s.notification_attempts, x.operation, x.request_json, x.account_id,
+              x.error AS operation_error
        FROM scheduled_publications s JOIN x_operations x ON x.logical_id = s.logical_operation_id
        WHERE s.next_poll_at <= ? AND s.notification_attempts < 3
        ORDER BY s.next_poll_at LIMIT 10`,
@@ -42,6 +43,7 @@ export async function reconcileScheduledPublications(
     operation: string;
     request_json: string;
     account_id: string;
+    operation_error: string | null;
   }[];
   for (const row of rows) {
     if (row.notification_message) {
@@ -168,9 +170,10 @@ export async function reconcileScheduledPublications(
     const expectedSchedule = scheduledFor(row.operation, row.request_json);
     const scheduleMismatch =
       row.operation === "schedule" &&
-      observed === "scheduled" &&
-      Boolean(post.scheduledFor) &&
-      !sameInstant(post.scheduledFor!, expectedSchedule);
+      ((observed === "scheduled" &&
+        Boolean(post.scheduledFor) &&
+        !sameInstant(post.scheduledFor!, expectedSchedule)) ||
+        Boolean(row.operation_error?.includes("owner-authorized instant")));
     let driftCancelled = false;
     if (scheduleMismatch && provider.mutate) {
       try {
@@ -182,6 +185,23 @@ export async function reconcileScheduledPublications(
         driftCancelled = cancellation.status === "cancelled";
       } catch {
         // Keep monitoring until cancellation can be verified.
+      }
+    }
+    let cancelRetried = false;
+    if (
+      row.operation === "cancel" &&
+      observed === "scheduled" &&
+      provider.mutate
+    ) {
+      try {
+        const cancellation = await provider.mutate({
+          requestId: `cancel-retry:${row.logical_operation_id}`,
+          accountId: row.account_id,
+          request: { operation: "cancel", providerPostId: row.provider_id },
+        });
+        cancelRetried = cancellation.status === "cancelled";
+      } catch {
+        // Keep monitoring and retrying while the schedule remains active.
       }
     }
     const futureSchedule =
@@ -201,9 +221,19 @@ export async function reconcileScheduledPublications(
     const exhausted = unsettled && pollCount >= 3;
     let status = observed;
     let error = target?.errorMessage ?? null;
-    if (unexpectedPublication) {
+    if (scheduleMismatch && observed === "published") {
+      status = "partial";
+      error =
+        "Zernio published the post after drifting from the exact owner-authorized instant";
+    } else if (unexpectedPublication) {
       status = "partial";
       error = `Zernio reported the ${row.operation} target as published`;
+    } else if (cancelRetried) {
+      status = "cancelled";
+      error = null;
+    } else if (row.operation === "cancel" && observed === "scheduled") {
+      status = "publishing";
+      error = "Cancellation is not yet verified; the schedule remains active";
     } else if (scheduleMismatch && driftCancelled) {
       status = "partial";
       error =
@@ -212,7 +242,7 @@ export async function reconcileScheduledPublications(
       status = "publishing";
       error =
         "Zernio drifted from the owner-authorized instant; cancellation is not yet verified";
-    } else if (exhausted) {
+    } else if (exhausted && row.operation !== "cancel") {
       status = "partial";
       error = editMismatch
         ? "Zernio did not expose the authorized edited content after bounded polling"
