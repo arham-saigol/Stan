@@ -225,11 +225,27 @@ describe("declarative automations", () => {
         "2026-08-13T04:00:00Z",
         "2026-08-13T04:00:00Z",
       );
+    database.database
+      .prepare(
+        `INSERT INTO heartbeat_occurrences(
+           occurrence_id, local_date, scheduled_for, kind, status, notify,
+           message, created_at, updated_at
+         ) VALUES (?, ?, ?, 'regular', 'ready', 1, ?, ?, ?)`,
+      )
+      .run(
+        "heartbeat:2026-08-13:regular:10:00",
+        "2026-08-13",
+        "2026-08-13T05:00:00Z",
+        "Queued interruption",
+        "2026-08-13T04:00:00Z",
+        "2026-08-13T04:00:00Z",
+      );
+    const sendOwner = vi.fn();
     const scheduler = new Scheduler(
       database,
       config,
       { isBusy: () => false } as unknown as StanAgentRuntime,
-      { sendOwner: vi.fn() } as unknown as DeliveryService,
+      { sendOwner } as unknown as DeliveryService,
       new AutomationStore(database),
       pino({ level: "silent" }),
     );
@@ -243,6 +259,14 @@ describe("declarative automations", () => {
         )
         .get("heartbeat:2026-08-13:regular:09:00"),
     ).toEqual({ status: "silent", notify: 0, next_retry_at: null });
+    expect(
+      database.database
+        .prepare(
+          "SELECT status, notify, next_retry_at FROM heartbeat_occurrences WHERE occurrence_id = ?",
+        )
+        .get("heartbeat:2026-08-13:regular:10:00"),
+    ).toEqual({ status: "silent", notify: 0, next_retry_at: null });
+    expect(sendOwner).not.toHaveBeenCalled();
     database.close();
   });
 

@@ -349,6 +349,9 @@ export function heartbeatSettingsMutationPayload(
   if (!keys.some((key) => input[key] !== undefined))
     throw new Error("Heartbeat settings confirmation is empty");
   if (
+    Object.keys(input).some(
+      (key) => !keys.includes(key as (typeof keys)[number]),
+    ) ||
     (input.enabled !== undefined && typeof input.enabled !== "boolean") ||
     !validOptionalTime(input.startTime) ||
     !validOptionalTime(input.endTime) ||

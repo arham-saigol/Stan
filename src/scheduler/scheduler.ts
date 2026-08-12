@@ -80,18 +80,18 @@ export class Scheduler {
     config: StanConfig,
     now: Temporal.Instant,
   ): Promise<void> {
-    await this.retryHeartbeatNotifications(now);
     if (!config.heartbeat.enabled) {
       this.database.database
         .prepare(
           `UPDATE heartbeat_occurrences SET status = 'silent', notify = 0,
            reason = 'Heartbeat disabled before recovery', lease_until = NULL,
            next_retry_at = NULL, updated_at = ?
-           WHERE status = 'failed' AND notify IS NOT 1 AND next_retry_at IS NOT NULL`,
+           WHERE status IN ('failed', 'ready', 'leased', 'running')`,
         )
         .run(now.toString());
       return;
     }
+    await this.retryHeartbeatNotifications(now);
     const completed = new Set(
       (
         this.database.database

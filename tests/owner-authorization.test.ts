@@ -199,5 +199,10 @@ describe("owner X authorization classification", () => {
         'update heartbeat: {"intervalMinutes":5}',
       ),
     ).toBeUndefined();
+    expect(
+      deriveHeartbeatSettingsAuthorization(
+        'update heartbeat: {"startTime":"09:00","timezone":"UTC"}',
+      ),
+    ).toBeUndefined();
   });
 });
