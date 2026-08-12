@@ -1,3 +1,4 @@
+import { Temporal } from "@js-temporal/polyfill";
 import { Cron } from "croner";
 import { TIMEZONE } from "../config/schema.ts";
 import type {
@@ -458,9 +459,11 @@ function validateCronMinutes(expression: string): void {
   const minutes =
     minuteField === "*/30" || minuteField === "0-59/30"
       ? [0, 30]
-      : minuteField.split(",").map((value) =>
-          /^\d{1,2}$/.test(value) ? Number(value) : Number.NaN,
-        );
+      : minuteField
+          .split(",")
+          .map((value) =>
+            /^\d{1,2}$/.test(value) ? Number(value) : Number.NaN,
+          );
   const unique = [...new Set(minutes)].sort((left, right) => left - right);
   if (
     unique.length < 1 ||
@@ -469,8 +472,7 @@ function validateCronMinutes(expression: string): void {
       (minute) => !Number.isInteger(minute) || minute < 0 || minute > 59,
     ) ||
     (unique.length === 2 &&
-      (unique[1]! - unique[0]! < 30 ||
-        60 - unique[1]! + unique[0]! < 30))
+      (unique[1]! - unique[0]! < 30 || 60 - unique[1]! + unique[0]! < 30))
   ) {
     throw new Error("Cron automations must run at least 30 minutes apart");
   }
@@ -480,10 +482,11 @@ function normalizeInstant(value: string): string {
   if (!/(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) {
     throw new Error("One-shot automation time must include a UTC offset");
   }
-  const milliseconds = Date.parse(value);
-  if (!Number.isFinite(milliseconds))
+  try {
+    return Temporal.Instant.from(value).toString();
+  } catch {
     throw new Error("One-shot automation time is invalid");
-  return new Date(milliseconds).toISOString();
+  }
 }
 
 function mapAutomation(

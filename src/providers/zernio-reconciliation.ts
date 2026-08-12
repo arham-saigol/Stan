@@ -1,3 +1,4 @@
+import { Temporal } from "@js-temporal/polyfill";
 import type { Post } from "@zernio/node";
 import type { DeliveryService } from "../gateway/delivery.ts";
 import { redactForLogging } from "../logging.ts";
@@ -158,10 +159,17 @@ export async function reconcileScheduledPublications(
     const unexpectedPublication =
       observed === "published" &&
       (row.operation === "draft" || row.operation === "cancel");
+    const expectedSchedule = scheduledFor(row.operation, row.request_json);
+    const scheduleMismatch =
+      row.operation === "schedule" &&
+      observed === "scheduled" &&
+      Boolean(post.scheduledFor) &&
+      !sameInstant(post.scheduledFor!, expectedSchedule);
     const futureSchedule =
       row.operation === "schedule" &&
       observed === "scheduled" &&
       Boolean(post.scheduledFor) &&
+      !scheduleMismatch &&
       Date.parse(post.scheduledFor!) > now.getTime();
     const unsettled =
       incompletePublished ||
@@ -177,6 +185,10 @@ export async function reconcileScheduledPublications(
     if (unexpectedPublication) {
       status = "partial";
       error = `Zernio reported the ${row.operation} target as published`;
+    } else if (scheduleMismatch) {
+      status = "partial";
+      error =
+        "Zernio scheduled the post outside the exact owner-authorized instant";
     } else if (exhausted) {
       status = "partial";
       error = editMismatch
@@ -241,6 +253,35 @@ export async function reconcileScheduledPublications(
     }
   }
   return rows.length;
+}
+
+function scheduledFor(
+  operation: string,
+  requestJson: string,
+): string | undefined {
+  if (operation !== "schedule") return undefined;
+  try {
+    const request = JSON.parse(requestJson) as { scheduledFor?: unknown };
+    return typeof request.scheduledFor === "string"
+      ? request.scheduledFor
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function sameInstant(value: string, expected: string | undefined): boolean {
+  if (!expected) return false;
+  try {
+    return (
+      Temporal.Instant.compare(
+        Temporal.Instant.from(value),
+        Temporal.Instant.from(expected),
+      ) === 0
+    );
+  } catch {
+    return false;
+  }
 }
 
 function editContent(

@@ -175,7 +175,13 @@ export class ZernioWriteService {
         accountId: context.selectedAccountId,
         request: providerRequest,
       });
-      const status = verifiedStatus(request.operation, result);
+      const scheduleDrift =
+        request.operation === "schedule" &&
+        result.scheduledFor !== undefined &&
+        !sameScheduledInstant(result.scheduledFor, scheduledFor!);
+      const status = scheduleDrift
+        ? "partial"
+        : verifiedStatus(request.operation, result);
       const updated = this.database.updateXOperation(operation.logicalId, {
         status,
         ...(result.providerId === undefined
@@ -188,7 +194,9 @@ export class ZernioWriteService {
         ...(result.scheduledFor === undefined
           ? {}
           : { scheduledFor: result.scheduledFor }),
-        error: result.error ?? null,
+        error: scheduleDrift
+          ? "Zernio returned a schedule outside the exact owner-authorized instant"
+          : (result.error ?? null),
       });
       if (
         updated.status === "cancelled" &&
@@ -261,6 +269,19 @@ export class ZernioWriteService {
         trackProviderPoll(this.database, updated, new Date());
       return updated;
     }
+  }
+}
+
+function sameScheduledInstant(value: string, expected: string): boolean {
+  try {
+    return (
+      Temporal.Instant.compare(
+        Temporal.Instant.from(value),
+        Temporal.Instant.from(expected),
+      ) === 0
+    );
+  } catch {
+    return false;
   }
 }
 

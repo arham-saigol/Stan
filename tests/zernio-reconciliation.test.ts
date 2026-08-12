@@ -730,6 +730,65 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.close();
   });
 
+  it("surfaces provider drift from the owner-authorized schedule", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-schedule",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "schedule X post",
+      receivedAt: "2026-08-13T00:00:00Z",
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-schedule",
+      operation: "schedule",
+      authorizedContent: "hello",
+      authorizedScheduledFor: "2026-08-14T00:00:00.000Z",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const provider = {
+      mutate: vi.fn(async () => ({
+        status: "scheduled" as const,
+        providerId: "z-1",
+        scheduledFor: "2026-08-14T00:00:00Z",
+      })),
+      getPost: vi.fn(async () => ({
+        status: "scheduled" as const,
+        scheduledFor: "2026-08-14T01:00:00Z",
+        platforms: [
+          { platform: "twitter" as const, status: "scheduled" as const },
+        ],
+      })),
+    };
+    const operation = await new ZernioWriteService(database, provider).execute(
+      { sourceMessageId: "owner-schedule", selectedAccountId: "account-1" },
+      {
+        operation: "schedule",
+        content: "hello",
+        scheduledFor: "2026-08-14T00:00:00Z",
+      },
+    );
+    database.database
+      .prepare(
+        "UPDATE scheduled_publications SET next_poll_at = ? WHERE logical_operation_id = ?",
+      )
+      .run("2026-08-13T00:02:00.000Z", operation.logicalId);
+    const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
+
+    await reconcileScheduledPublications(
+      database,
+      provider,
+      { sendOwner } as unknown as DeliveryService,
+      new Date("2026-08-13T00:02:00Z"),
+    );
+
+    const resolved = database.getXOperation(operation.logicalId)!;
+    expect(resolved.status).toBe("partial");
+    expect(resolved.error).toMatch(/owner-authorized instant/i);
+    expect(sendOwner).toHaveBeenCalledOnce();
+    database.close();
+  });
+
   it("keeps an unchanged delete unresolved until bounded polling exhausts", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

@@ -47,6 +47,16 @@ describe("declarative automations", () => {
         now: new Date("2026-08-13T00:31:00Z"),
       }),
     ).toThrow(/30 minutes/i);
+    expect(() =>
+      store.create({
+        name: "impossible date",
+        schedule: { type: "once", at: "2099-02-29T12:00:00Z" },
+        instruction: "Research one topic",
+        deliveryMode: "silent",
+        creatorMessageId: "owner-1",
+        now: new Date("2026-08-13T00:00:00Z"),
+      }),
+    ).toThrow(/invalid/i);
     database.close();
   });
 
