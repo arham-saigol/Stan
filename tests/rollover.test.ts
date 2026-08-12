@@ -114,6 +114,50 @@ describe("daily session rollover", () => {
     database.close();
   });
 
+  it("does not close a session until its memory work is durable", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const logger = pino({ level: "silent" });
+    await repairDailyRollover(
+      database,
+      undefined,
+      logger,
+      Temporal.Instant.from("2026-08-13T18:59:00Z"),
+    );
+    database.claimInbound({
+      id: "completed-turn",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "remember this",
+      receivedAt: "2026-08-13T18:59:30Z",
+    });
+    database.setInboundState("completed-turn", "delivered", {
+      sessionId: "stan-owner-2026-08-13",
+      responseText: "remembered",
+    });
+    database.database.exec(
+      `CREATE TRIGGER reject_memory BEFORE INSERT ON memory_documents
+       BEGIN SELECT RAISE(ABORT, 'simulated persistence failure'); END`,
+    );
+
+    await expect(
+      repairDailyRollover(
+        database,
+        undefined,
+        logger,
+        Temporal.Instant.from("2026-08-13T19:02:00Z"),
+      ),
+    ).rejects.toThrow("simulated persistence failure");
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT state, transcript_complete FROM daily_sessions WHERE local_date = '2026-08-13'",
+        )
+        .get(),
+    ).toEqual({ state: "active", transcript_complete: 0 });
+    database.close();
+  });
+
   it("waits for an overdue automation to be claimed before closing", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

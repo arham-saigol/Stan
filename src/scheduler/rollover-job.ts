@@ -2,7 +2,10 @@ import { Temporal } from "@js-temporal/polyfill";
 import type { Logger } from "pino";
 import { TIMEZONE } from "../config/schema.ts";
 import type { SupermemoryProvider } from "../memory/supermemory.ts";
-import { ingestPendingMemory } from "../memory/ingestion.ts";
+import {
+  ingestPendingMemory,
+  queuePendingMemory,
+} from "../memory/ingestion.ts";
 import type { ApplicationDatabase } from "../storage/application-db.ts";
 import { pakistanRoutingDate } from "./rollover.ts";
 
@@ -30,29 +33,28 @@ export async function repairDailyRollover(
       .get(previous.conversation_id);
     if (unsettled || hasUnsettledProactive(database, previous.local_date))
       continue;
-    database.database
-      .prepare(
-        "UPDATE daily_sessions SET state = 'closed', closed_at = ? WHERE local_date = ?",
-      )
-      .run(timestamp, previous.local_date);
     const transcript = localTranscript(
       database,
       previous.local_date,
       previous.conversation_id,
     );
-    database.database
-      .prepare(
-        "UPDATE daily_sessions SET transcript_complete = 1 WHERE local_date = ?",
-      )
-      .run(previous.local_date);
-    if (transcript.trim()) {
-      await ingestPendingMemory(database, memory, {
-        localDate: previous.local_date,
-        conversationId: previous.conversation_id,
-        transcript,
-        complete: true,
-      });
-    }
+    const memoryInput = {
+      localDate: previous.local_date,
+      conversationId: previous.conversation_id,
+      transcript,
+      complete: true,
+    };
+    database.transaction(() => {
+      if (transcript.trim()) queuePendingMemory(database, memoryInput);
+      database.database
+        .prepare(
+          `UPDATE daily_sessions SET state = 'closed', closed_at = ?, transcript_complete = 1
+           WHERE local_date = ?`,
+        )
+        .run(timestamp, previous.local_date);
+    });
+    if (transcript.trim() && memory)
+      await ingestPendingMemory(database, memory, memoryInput);
   }
   database.database
     .prepare(

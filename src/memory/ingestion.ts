@@ -2,16 +2,17 @@ import type { ApplicationDatabase } from "../storage/application-db.ts";
 import { redactForLogging } from "../logging.ts";
 import type { SupermemoryProvider } from "./supermemory.ts";
 
-export async function ingestPendingMemory(
+interface PendingMemoryInput {
+  localDate: string;
+  conversationId: string;
+  transcript: string;
+  complete: boolean;
+}
+
+export function queuePendingMemory(
   database: ApplicationDatabase,
-  memory: SupermemoryProvider | undefined,
-  input: {
-    localDate: string;
-    conversationId: string;
-    transcript: string;
-    complete: boolean;
-  },
-): Promise<void> {
+  input: PendingMemoryInput,
+): void {
   const customId = `stan-session-${input.localDate}`;
   const now = new Date().toISOString();
   database.database
@@ -34,7 +35,16 @@ export async function ingestPendingMemory(
       input.complete ? 1 : 0,
       now,
     );
+}
+
+export async function ingestPendingMemory(
+  database: ApplicationDatabase,
+  memory: SupermemoryProvider | undefined,
+  input: PendingMemoryInput,
+): Promise<void> {
+  queuePendingMemory(database, input);
   if (!memory) return;
+  const customId = `stan-session-${input.localDate}`;
   try {
     const result = await memory.ingestSession(input);
     database.database

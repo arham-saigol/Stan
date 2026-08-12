@@ -33,15 +33,6 @@ export async function apisAuthCommand(root: string): Promise<void> {
     });
     if (value.trim()) updates[name] = value.trim();
   }
-  if (
-    updates.zernioApiKey &&
-    updates.zernioApiKey !== existingCredentials?.zernioApiKey &&
-    hasUnsettledDestructiveWrites(root)
-  ) {
-    throw new Error(
-      "Cannot rotate Zernio credentials while an X cancel or delete is still being verified",
-    );
-  }
   if (updates.xquikApiKey)
     await new XQuikProvider(updates.xquikApiKey).health();
   let selectedXAccountId: string | undefined;
@@ -68,22 +59,38 @@ export async function apisAuthCommand(root: string): Promise<void> {
       config.memoryContainerTag,
     ).profile();
   }
-  if (selectedXAccountId) {
-    await configStore.update((config) => ({
-      ...config,
-      selectedXAccountId,
-    }));
-  }
-  await store.update(updates);
-  console.log("API credentials validated where possible and saved.");
   const credentialsChanged = Object.keys(updates).length > 0;
   const daemonIsRunning = credentialsChanged
     ? Boolean(await getDaemonStatus(root))
     : false;
-  if (credentialsChanged && (daemonWasRunning || daemonIsRunning)) {
-    await stopService(root);
-    await startService(root);
-    console.log("Stan restarted with the updated provider credentials.");
+  const shouldRestart = daemonWasRunning || daemonIsRunning;
+  try {
+    if (credentialsChanged && shouldRestart) await stopService(root);
+    if (
+      updates.zernioApiKey &&
+      updates.zernioApiKey !== existingCredentials?.zernioApiKey &&
+      hasUnsettledDestructiveWrites(root)
+    ) {
+      throw new Error(
+        "Cannot rotate Zernio credentials while an X cancel or delete is still being verified",
+      );
+    }
+    if (selectedXAccountId) {
+      await configStore.update((config) => ({
+        ...config,
+        selectedXAccountId,
+      }));
+    }
+    await store.update(updates);
+    console.log("API credentials validated where possible and saved.");
+    if (credentialsChanged && shouldRestart) {
+      await startService(root);
+      console.log("Stan restarted with the updated provider credentials.");
+    }
+  } catch (error) {
+    if (credentialsChanged && shouldRestart)
+      await startService(root).catch(() => undefined);
+    throw error;
   }
 }
 
