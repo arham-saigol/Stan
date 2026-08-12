@@ -94,6 +94,62 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.close();
   });
 
+  it("rejects schedule drift returned by a recovered create", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-schedule",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "schedule it",
+      receivedAt: "2026-08-13T00:00:00Z",
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-schedule",
+      operation: "schedule",
+      authorizedContent: "hello",
+      authorizedScheduledFor: "2026-08-14T00:00:00.000Z",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    let attempt = 0;
+    const provider: ZernioMutationProvider = {
+      mutate: vi.fn(async () => {
+        attempt += 1;
+        if (attempt === 1) throw new Error("connection reset");
+        return {
+          status: "scheduled" as const,
+          providerId: "z-1",
+          scheduledFor: "2026-08-14T01:00:00Z",
+        };
+      }),
+    };
+    const initial = await new ZernioWriteService(database, provider).execute(
+      {
+        sourceMessageId: "owner-schedule",
+        selectedAccountId: "account-1",
+      },
+      {
+        operation: "schedule",
+        content: "hello",
+        scheduledFor: "2026-08-14T00:00:00Z",
+      },
+    );
+    setOperationCreatedAt(database, initial.logicalId);
+    const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
+
+    await reconcilePendingXOperations(
+      database,
+      provider,
+      { sendOwner } as unknown as DeliveryService,
+      new Date("2026-08-13T00:02:00Z"),
+    );
+
+    const resolved = database.getXOperation(initial.logicalId)!;
+    expect(resolved.status).toBe("partial");
+    expect(resolved.error).toMatch(/owner-authorized instant/i);
+    expect(sendOwner).not.toHaveBeenCalled();
+    database.close();
+  });
+
   it("retries a terminal owner notification without repeating the provider mutation", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

@@ -1,3 +1,4 @@
+import { Temporal } from "@js-temporal/polyfill";
 import type { DeliveryService } from "../gateway/delivery.ts";
 import { redactForLogging } from "../logging.ts";
 import type {
@@ -219,14 +220,35 @@ function applyResult(
   request: ZernioMutationRequest,
   result: ProviderMutationResult,
 ): XOperation {
+  const scheduleDrift =
+    request.operation === "schedule" &&
+    result.scheduledFor !== undefined &&
+    !sameInstant(result.scheduledFor, request.scheduledFor);
   return database.updateXOperation(operation.logicalId, {
-    status: verifiedStatus(request.operation, result),
+    status: scheduleDrift
+      ? "partial"
+      : verifiedStatus(request.operation, result),
     ...(result.providerId ? { providerId: result.providerId } : {}),
     ...(result.publicId ? { publicId: result.publicId } : {}),
     ...(result.publicUrl ? { publicUrl: result.publicUrl } : {}),
     ...(result.scheduledFor ? { scheduledFor: result.scheduledFor } : {}),
-    error: result.error ?? null,
+    error: scheduleDrift
+      ? "Zernio returned a schedule outside the exact owner-authorized instant"
+      : (result.error ?? null),
   });
+}
+
+function sameInstant(value: string, expected: string): boolean {
+  try {
+    return (
+      Temporal.Instant.compare(
+        Temporal.Instant.from(value),
+        Temporal.Instant.from(expected),
+      ) === 0
+    );
+  } catch {
+    return false;
+  }
 }
 
 function parseRequest(value: string): ZernioMutationRequest {

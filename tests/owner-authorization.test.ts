@@ -63,6 +63,12 @@ describe("owner X authorization classification", () => {
       targetPostId: "1900123456789",
       authorizedContent: "Exact reply",
     });
+    expect(
+      deriveAuthorization(
+        "Reply to X post 1900123456789",
+        "See https://x.com/other/status/999 and reply here",
+      ),
+    ).toMatchObject({ targetPostId: "1900123456789" });
     expect(deriveAuthorization("Reply to this thread")).toBeUndefined();
   });
 

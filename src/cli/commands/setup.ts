@@ -13,7 +13,12 @@ import { ApplicationDatabase } from "../../storage/application-db.ts";
 import { WorkspaceStore } from "../../workspace/store.ts";
 import { authenticateCodexAndSelect } from "./auth.ts";
 import { hasTrackedZernioWrites } from "./apis-auth.ts";
-import { installAutostart } from "./service.ts";
+import {
+  getDaemonStatus,
+  installAutostart,
+  startService,
+  stopService,
+} from "./service.ts";
 import { authenticateWhatsApp } from "./whatsapp-auth.ts";
 
 export async function setupCommand(root: string): Promise<void> {
@@ -27,6 +32,8 @@ export async function setupCommand(root: string): Promise<void> {
   database.migrate();
   const workspace = new WorkspaceStore(paths.workspace);
   await workspace.initialize();
+  const daemonWasRunning = Boolean(await getDaemonStatus(root));
+  let daemonStopped = false;
   try {
     console.log(
       "Baileys is unofficial and can break when WhatsApp changes. Use a dedicated number; automation can result in suspension.",
@@ -115,6 +122,10 @@ export async function setupCommand(root: string): Promise<void> {
         config.memoryContainerTag,
       ).profile();
     }
+    if (daemonWasRunning) {
+      await stopService(root);
+      daemonStopped = true;
+    }
     const finalConfig = await configStore.write({
       ...config,
       ownerPhone,
@@ -150,5 +161,6 @@ export async function setupCommand(root: string): Promise<void> {
     });
   } finally {
     database.close();
+    if (daemonStopped) await startService(root);
   }
 }

@@ -119,7 +119,8 @@ export function deriveAuthorization(
       ...(authorizedScheduledFor ? { authorizedScheduledFor } : {}),
     };
   }
-  const targetPostId = extractTargetPostId(`${text}\n${quotedText ?? ""}`);
+  const targetPostId =
+    extractTargetPostId(text) ?? extractTargetPostId(quotedText ?? "");
   return targetPostId
     ? {
         operation,
