@@ -150,6 +150,61 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.close();
   });
 
+  it("retries an ID-less partial result returned during reconciliation", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-idless-schedule",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "schedule it",
+      receivedAt: "2026-08-13T00:00:00Z",
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-idless-schedule",
+      operation: "schedule",
+      authorizedContent: "hello",
+      authorizedScheduledFor: "2026-08-14T00:00:00.000Z",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    let attempt = 0;
+    const provider: ZernioMutationProvider = {
+      mutate: vi.fn(async () => {
+        attempt += 1;
+        if (attempt === 1) throw new Error("connection reset");
+        return {
+          status: "scheduled" as const,
+          scheduledFor: "2026-08-14T00:00:00Z",
+        };
+      }),
+    };
+    const operation = await new ZernioWriteService(database, provider).execute(
+      {
+        sourceMessageId: "owner-idless-schedule",
+        selectedAccountId: "account-1",
+      },
+      {
+        operation: "schedule",
+        content: "hello",
+        scheduledFor: "2026-08-14T00:00:00Z",
+      },
+    );
+    setOperationCreatedAt(database, operation.logicalId);
+
+    await reconcilePendingXOperations(
+      database,
+      provider,
+      { sendOwner: vi.fn() } as unknown as DeliveryService,
+      new Date("2026-08-13T00:02:00Z"),
+    );
+
+    expect(database.getXOperation(operation.logicalId)).toMatchObject({
+      status: "publishing",
+      retryCount: 2,
+      providerId: null,
+    });
+    database.close();
+  });
+
   it("retries a terminal owner notification without repeating the provider mutation", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

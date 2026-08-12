@@ -100,7 +100,10 @@ export async function reconcilePendingXOperations(
       }
       continue;
     }
-    if (updated.status === "publishing") {
+    if (
+      (updated.status === "publishing" || updated.status === "partial") &&
+      !updated.providerId
+    ) {
       updated = database.scheduleXOperationRetry(
         operation.logicalId,
         result.error ??

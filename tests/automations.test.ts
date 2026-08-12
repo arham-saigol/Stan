@@ -102,6 +102,27 @@ describe("declarative automations", () => {
     database.close();
   });
 
+  it("does not advance an already-enabled schedule during replay", () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const store = new AutomationStore(database);
+    const automation = store.create({
+      name: "enable replay",
+      schedule: { type: "cron", expression: "0 * * * *" },
+      instruction: "Check once",
+      deliveryMode: "silent",
+      creatorMessageId: "owner-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    store.setEnabled(automation.id, false);
+    const enabled = store.setEnabled(automation.id, true);
+
+    const replayed = store.setEnabled(automation.id, true);
+
+    expect(replayed.nextRunAt).toBe(enabled.nextRunAt);
+    database.close();
+  });
+
   it("does not recover an unknown run after its automation is disabled", () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

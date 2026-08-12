@@ -141,6 +141,7 @@ export class AutomationStore {
   setEnabled(id: string, enabled: boolean): Automation {
     const current = this.get(id);
     if (!current) throw new Error("Automation not found");
+    if (current.enabled && enabled) return current;
     const now = new Date();
     const existingNext = current.nextRunAt ? new Date(current.nextRunAt) : null;
     const next =
