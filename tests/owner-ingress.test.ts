@@ -351,6 +351,32 @@ describe("owner-only ingress", () => {
     });
   });
 
+  it("backs off recovered failures from the current attempt time", async () => {
+    const { ingress, database, read } = await harness();
+    read.mockRejectedValue(new Error("Flue unavailable"));
+    database.claimInbound({
+      id: "recovered-failure",
+      senderIdentity: ownerJid,
+      body: "Please post the quoted draft",
+      quotedText: "Option 2",
+      receivedAt: "2026-08-13T09:00:00.000Z",
+      admittedAt: "2026-08-13T09:00:00.000Z",
+    });
+
+    await ingress.reconcilePending(5, new Date("2026-08-13T10:00:00.000Z"));
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT next_retry_at FROM inbound_messages WHERE provider_message_id = 'recovered-failure'",
+        )
+        .get(),
+    ).toEqual({ next_retry_at: "2026-08-13T10:01:00.000Z" });
+    expect(
+      database.getAuthorizationForSource("recovered-failure"),
+    ).toMatchObject({ createdAt: "2026-08-13T09:00:00.000Z" });
+  });
+
   it("creates a transcript session for a delayed missed-day message", async () => {
     const { ingress, database } = await harness();
 

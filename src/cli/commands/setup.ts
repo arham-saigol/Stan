@@ -34,6 +34,9 @@ export async function setupCommand(root: string): Promise<void> {
   await workspace.initialize();
   const daemonWasRunning = Boolean(await getDaemonStatus(root));
   let daemonStopped = false;
+  let existingConfig: ReturnType<ConfigStore["read"]> | undefined;
+  let configWritten = false;
+  let credentialsSaved = false;
   try {
     console.log(
       "Baileys is unofficial and can break when WhatsApp changes. Use a dedicated number; automation can result in suspension.",
@@ -42,7 +45,6 @@ export async function setupCommand(root: string): Promise<void> {
       "Selected conversations and context are sent to Supermemory cloud only when its key is configured.",
     );
     const configStore = new ConfigStore(root);
-    let existingConfig: ReturnType<ConfigStore["read"]> | undefined;
     try {
       existingConfig = configStore.read();
     } catch {
@@ -136,7 +138,9 @@ export async function setupCommand(root: string): Promise<void> {
       },
       ...(selectedXAccountId ? { selectedXAccountId } : {}),
     });
+    configWritten = true;
     await credentialStore.update(apiValues);
+    credentialsSaved = true;
     database.configureOwnerIdentity(`${ownerPhone.slice(1)}@s.whatsapp.net`);
     if (
       await confirm({ message: "Authenticate WhatsApp now?", default: true })
@@ -159,6 +163,10 @@ export async function setupCommand(root: string): Promise<void> {
       xAccount: selectedXAccountId ?? "not configured",
       heartbeat: finalConfig.heartbeat,
     });
+  } catch (error) {
+    if (configWritten && !credentialsSaved && existingConfig)
+      await new ConfigStore(root).write(existingConfig);
+    throw error;
   } finally {
     database.close();
     if (daemonStopped) await startService(root);

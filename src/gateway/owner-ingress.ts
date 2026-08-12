@@ -146,6 +146,7 @@ export class OwnerIngress {
         row.session_id ?? undefined,
         row.flue_submission_id ?? undefined,
         new Date(row.admitted_at),
+        now,
       );
       processed += 1;
     }
@@ -156,11 +157,18 @@ export class OwnerIngress {
     message: InboundMessage,
     persistedSessionId?: string,
     persistedSubmissionId?: string,
-    now = new Date(),
+    authorizationTime = new Date(),
+    attemptTime = authorizationTime,
   ): Promise<{ status: "delivered" | "failed" }> {
     this.processing.add(message.id);
     return this.enqueue(() =>
-      this.process(message, persistedSessionId, persistedSubmissionId, now),
+      this.process(
+        message,
+        persistedSessionId,
+        persistedSubmissionId,
+        authorizationTime,
+        attemptTime,
+      ),
     ).finally(() => this.processing.delete(message.id));
   }
 
@@ -177,7 +185,8 @@ export class OwnerIngress {
     message: InboundMessage,
     persistedSessionId?: string,
     persistedSubmissionId?: string,
-    now = new Date(),
+    authorizationTime = new Date(),
+    attemptTime = authorizationTime,
   ): Promise<{ status: "delivered" | "failed" }> {
     try {
       if (!this.database.getAuthorizationForSource(message.id)) {
@@ -189,7 +198,7 @@ export class OwnerIngress {
           this.database.createAuthorization({
             sourceMessageId: message.id,
             operation: authorization.operation,
-            now,
+            now: authorizationTime,
             ...(authorization.targetPostId
               ? { targetPostId: authorization.targetPostId }
               : {}),
@@ -213,7 +222,7 @@ export class OwnerIngress {
           message.id,
           automationOperation.operation,
           automationOperation.payloadJson,
-          now,
+          authorizationTime,
         );
       }
       const workspaceAuthorization = deriveWorkspaceAuthorization(message.text);
@@ -221,7 +230,7 @@ export class OwnerIngress {
         this.database.createWorkspaceAuthorization(
           message.id,
           workspaceAuthorization.payloadJson,
-          now,
+          authorizationTime,
         );
       }
       const memoryAuthorization = deriveMemoryAuthorization(message.text);
@@ -230,7 +239,7 @@ export class OwnerIngress {
           message.id,
           memoryAuthorization.operation,
           memoryAuthorization.payloadJson,
-          now,
+          authorizationTime,
         );
       }
       const heartbeatAuthorization = deriveHeartbeatSettingsAuthorization(
@@ -240,7 +249,7 @@ export class OwnerIngress {
         this.database.createHeartbeatSettingsAuthorization(
           message.id,
           heartbeatAuthorization.payloadJson,
-          now,
+          authorizationTime,
         );
       }
       const sessionId =
@@ -283,7 +292,11 @@ export class OwnerIngress {
       });
       return { status: "delivered" };
     } catch (error) {
-      this.database.recordInboundFailure(message.id, safeError(error), now);
+      this.database.recordInboundFailure(
+        message.id,
+        safeError(error),
+        attemptTime,
+      );
       return { status: "failed" };
     }
   }
