@@ -1197,7 +1197,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
     expect(provider.mutate).toHaveBeenLastCalledWith({
       requestId: `delete-retry:${operation.logicalId}`,
       accountId: "account-1",
-      request: { operation: "cancel", providerPostId: "z-1" },
+      request: { operation: "delete", providerPostId: "z-1" },
     });
     expect(sendOwner).toHaveBeenCalledOnce();
     database.close();

@@ -13,7 +13,7 @@ interface ZernioStatusProvider {
   mutate?(input: {
     requestId: string;
     accountId: string;
-    request: { operation: "cancel"; providerPostId: string };
+    request: { operation: "cancel" | "delete"; providerPostId: string };
   }): Promise<{ status: string }>;
 }
 
@@ -190,14 +190,18 @@ export async function reconcileScheduledPublications(
     let destructiveRetried = false;
     if (
       (row.operation === "cancel" || row.operation === "delete") &&
-      observed === "scheduled" &&
+      (observed === "scheduled" ||
+        (row.operation === "delete" && observed === "published")) &&
       provider.mutate
     ) {
       try {
         const cancellation = await provider.mutate({
           requestId: `${row.operation}-retry:${row.logical_operation_id}`,
           accountId: row.account_id,
-          request: { operation: "cancel", providerPostId: row.provider_id },
+          request: {
+            operation: row.operation === "delete" ? "delete" : "cancel",
+            providerPostId: row.provider_id,
+          },
         });
         destructiveRetried = cancellation.status === "cancelled";
       } catch {
@@ -232,11 +236,13 @@ export async function reconcileScheduledPublications(
       status = "cancelled";
       error = null;
     } else if (
+      !exhausted &&
       (row.operation === "cancel" || row.operation === "delete") &&
-      observed === "scheduled"
+      (observed === "scheduled" ||
+        (row.operation === "delete" && observed === "published"))
     ) {
       status = "publishing";
-      error = `${row.operation === "delete" ? "Deletion" : "Cancellation"} is not yet verified; the schedule remains active`;
+      error = `${row.operation === "delete" ? "Deletion" : "Cancellation"} is not yet verified; the target remains ${observed}`;
     } else if (scheduleMismatch && driftCancelled) {
       status = "partial";
       error =

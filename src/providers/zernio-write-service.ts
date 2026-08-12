@@ -181,12 +181,13 @@ export class ZernioWriteService {
         accountId: context.selectedAccountId,
         request: providerRequest,
       });
-      const scheduleDrift =
+      const unverifiableSchedule =
         request.operation === "schedule" &&
-        result.scheduledFor !== undefined &&
-        !sameScheduledInstant(result.scheduledFor, scheduledFor!);
+        result.providerId !== undefined &&
+        (result.scheduledFor === undefined ||
+          !sameScheduledInstant(result.scheduledFor, scheduledFor!));
       let driftCancelled = false;
-      if (scheduleDrift && result.providerId) {
+      if (unverifiableSchedule && result.providerId) {
         try {
           const cancellation = await this.provider.mutate({
             requestId: `schedule-drift:${operation.logicalId}`,
@@ -201,7 +202,7 @@ export class ZernioWriteService {
           // Persist and reconcile until cancellation can be verified.
         }
       }
-      const status = scheduleDrift
+      const status = unverifiableSchedule
         ? driftCancelled
           ? "partial"
           : "publishing"
@@ -218,10 +219,10 @@ export class ZernioWriteService {
         ...(result.scheduledFor === undefined
           ? {}
           : { scheduledFor: result.scheduledFor }),
-        error: scheduleDrift
+        error: unverifiableSchedule
           ? driftCancelled
-            ? "Zernio drifted from the owner-authorized instant; the unauthorized schedule was cancelled"
-            : "Zernio drifted from the owner-authorized instant; cancellation is not yet verified"
+            ? "Zernio did not verify the exact authorized schedule instant; the unsafe schedule was cancelled"
+            : "Zernio did not verify the exact authorized schedule instant; cancellation is not yet verified"
           : (result.error ?? null),
       });
       if (
