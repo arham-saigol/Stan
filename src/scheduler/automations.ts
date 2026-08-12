@@ -143,7 +143,7 @@ export class AutomationStore {
           .prepare(
             `UPDATE automation_runs SET status = 'failed', lease_until = NULL,
              error = 'Automation disabled before recovery', updated_at = ?
-             WHERE automation_id = ? AND status = 'unknown'`,
+             WHERE automation_id = ? AND status IN ('unknown', 'leased', 'running')`,
           )
           .run(timestamp, id);
       }
@@ -272,11 +272,24 @@ export class AutomationStore {
 
   retryRun(occurrenceId: string, error: string, now = new Date()): void {
     const row = this.application.database
-      .prepare("SELECT attempts FROM automation_runs WHERE occurrence_id = ?")
-      .get(occurrenceId) as { attempts: number } | undefined;
+      .prepare(
+        `SELECT r.attempts, r.status, a.enabled, a.schedule_type FROM automation_runs r
+         JOIN automations a ON a.id = r.automation_id WHERE r.occurrence_id = ?`,
+      )
+      .get(occurrenceId) as
+      | {
+          attempts: number;
+          status: string;
+          enabled: number;
+          schedule_type: "once" | "cron";
+        }
+      | undefined;
     if (!row) return;
     const attempts = row.attempts + 1;
-    const exhausted = attempts >= 3;
+    const exhausted =
+      attempts >= 3 ||
+      row.status === "failed" ||
+      (row.enabled !== 1 && row.schedule_type === "cron");
     this.application.database
       .prepare(
         `UPDATE automation_runs SET status = ?, attempts = ?, error = ?,

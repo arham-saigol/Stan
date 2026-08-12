@@ -102,6 +102,35 @@ describe("declarative automations", () => {
     database.close();
   });
 
+  it("settles a running recurring occurrence when its automation is paused", () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const store = new AutomationStore(database);
+    const automation = store.create({
+      name: "paused while running",
+      schedule: { type: "cron", expression: "0 * * * *" },
+      instruction: "Check hourly",
+      deliveryMode: "silent",
+      creatorMessageId: "owner-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const [run] = store.claimDue(new Date("2026-08-13T01:00:00Z"));
+    store.setSubmission(run!.occurrenceId, "submission-1");
+
+    store.setEnabled(automation.id, false);
+    store.retryRun(run!.occurrenceId, "read failed");
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT status, lease_until FROM automation_runs WHERE occurrence_id = ?",
+        )
+        .get(run!.occurrenceId),
+    ).toEqual({ status: "failed", lease_until: null });
+    expect(store.recoverableRuns(new Date("2026-08-13T02:00:00Z"))).toEqual([]);
+    database.close();
+  });
+
   it("claims each due occurrence exactly once", () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
@@ -127,6 +156,52 @@ describe("declarative automations", () => {
 
     expect(store.claimDue(new Date("2026-08-13T04:00:00Z"))).toHaveLength(1);
     expect(store.claimDue(new Date("2026-08-13T04:00:00Z"))).toHaveLength(0);
+    database.close();
+  });
+
+  it("settles pending heartbeat generation when heartbeats are disabled", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-heartbeat-disabled-"));
+    const config = new ConfigStore(root);
+    const initial = createDefaultConfig({ ownerPhone: "+923001234567" });
+    await config.write({
+      ...initial,
+      heartbeat: { ...initial.heartbeat, enabled: false },
+    });
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.database
+      .prepare(
+        `INSERT INTO heartbeat_occurrences(
+           occurrence_id, local_date, scheduled_for, kind, status, attempts,
+           next_retry_at, created_at, updated_at
+         ) VALUES (?, ?, ?, 'regular', 'failed', 1, ?, ?, ?)`,
+      )
+      .run(
+        "heartbeat:2026-08-13:regular:09:00",
+        "2026-08-13",
+        "2026-08-13T04:00:00Z",
+        "2026-08-13T04:01:00Z",
+        "2026-08-13T04:00:00Z",
+        "2026-08-13T04:00:00Z",
+      );
+    const scheduler = new Scheduler(
+      database,
+      config,
+      { isBusy: () => false } as unknown as StanAgentRuntime,
+      { sendOwner: vi.fn() } as unknown as DeliveryService,
+      new AutomationStore(database),
+      pino({ level: "silent" }),
+    );
+
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T04:02:00Z"));
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT status, notify, next_retry_at FROM heartbeat_occurrences WHERE occurrence_id = ?",
+        )
+        .get("heartbeat:2026-08-13:regular:09:00"),
+    ).toEqual({ status: "silent", notify: 0, next_retry_at: null });
     database.close();
   });
 

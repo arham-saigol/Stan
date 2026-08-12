@@ -278,6 +278,42 @@ describe("Zernio public-write boundary", () => {
     database.close();
   });
 
+  it("preserves the resolved provider ID after an ambiguous deletion", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-delete",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "delete https://x.com/a/status/1900123456789",
+      receivedAt: new Date().toISOString(),
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-delete",
+      operation: "delete",
+      targetPostId: "1900123456789",
+    });
+    const mutate = vi.fn(async () => {
+      throw new Error("connection reset after delete");
+    });
+    const service = new ZernioWriteService(database, {
+      mutate,
+      resolveProviderPostId: vi.fn(async () => "z-1"),
+    });
+
+    const result = await service.execute(
+      { sourceMessageId: "owner-delete", selectedAccountId: "account-1" },
+      { operation: "delete", providerPostId: "1900123456789" },
+    );
+
+    expect(result).toMatchObject({ status: "publishing", providerId: "z-1" });
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: { operation: "delete", providerPostId: "z-1" },
+      }),
+    );
+    database.close();
+  });
+
   it("rejects a destructive target other than the one the owner authorized", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

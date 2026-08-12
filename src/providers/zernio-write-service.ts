@@ -40,6 +40,7 @@ export interface ProviderMutationResult {
 
 export interface ZernioMutationProvider {
   verifyPostAccount?(postId: string, accountId: string): Promise<boolean>;
+  resolveProviderPostId?(postId: string, accountId: string): Promise<string>;
   mutate(input: {
     requestId: string;
     accountId: string;
@@ -71,6 +72,36 @@ export class ZernioWriteService {
         : request.operation === "reply"
           ? request.replyToPostId
           : undefined;
+    if (
+      ("providerPostId" in request || request.operation === "reply") &&
+      !targetPostId?.trim()
+    )
+      throw new Error("A target X post ID is required");
+    let resolvedTargetPostId = targetPostId;
+    if ("providerPostId" in request && targetPostId) {
+      if (this.provider.resolveProviderPostId) {
+        resolvedTargetPostId = await this.provider.resolveProviderPostId(
+          targetPostId,
+          context.selectedAccountId,
+        );
+      } else {
+        if (!this.provider.verifyPostAccount) {
+          throw new Error(
+            "The Zernio account boundary cannot verify this post",
+          );
+        }
+        if (
+          !(await this.provider.verifyPostAccount(
+            targetPostId,
+            context.selectedAccountId,
+          ))
+        ) {
+          throw new Error(
+            "The target post does not belong to the configured X account",
+          );
+        }
+      }
+    }
     const content = getContent(request);
     const scheduledFor =
       request.operation === "schedule"
@@ -108,36 +139,16 @@ export class ZernioWriteService {
             )
             .run(recoveredAt, recoveredAt, operation.logicalId);
           operation = this.database.getXOperation(operation.logicalId)!;
-        } else if (targetPostId) {
+        } else if (resolvedTargetPostId) {
           operation = this.database.updateXOperation(operation.logicalId, {
             status: "publishing",
-            providerId: targetPostId,
+            providerId: resolvedTargetPostId,
             error: "Provider call outcome was not recorded before recovery",
           });
           trackProviderPoll(this.database, operation, new Date());
         }
       }
       return operation;
-    }
-    if (
-      ("providerPostId" in request || request.operation === "reply") &&
-      !targetPostId?.trim()
-    )
-      throw new Error("A target X post ID is required");
-    if ("providerPostId" in request && targetPostId) {
-      if (!this.provider.verifyPostAccount) {
-        throw new Error("The Zernio account boundary cannot verify this post");
-      }
-      if (
-        !(await this.provider.verifyPostAccount(
-          targetPostId,
-          context.selectedAccountId,
-        ))
-      ) {
-        throw new Error(
-          "The target post does not belong to the configured X account",
-        );
-      }
     }
     if (
       request.operation === "schedule" &&
@@ -151,10 +162,14 @@ export class ZernioWriteService {
     if (isTerminal(operation.status)) return operation;
 
     try {
+      const providerRequest =
+        "providerPostId" in request && resolvedTargetPostId
+          ? { ...request, providerPostId: resolvedTargetPostId }
+          : request;
       const result = await this.provider.mutate({
         requestId: operation.requestId,
         accountId: context.selectedAccountId,
-        request,
+        request: providerRequest,
       });
       const status = verifiedStatus(request.operation, result);
       const updated = this.database.updateXOperation(operation.logicalId, {
@@ -206,11 +221,11 @@ export class ZernioWriteService {
         (updated.status === "publishing" ||
           (request.operation === "edit" && updated.status === "partial")) &&
         !isRetryableCreate(request.operation) &&
-        targetPostId
+        resolvedTargetPostId
       ) {
         const pollable = this.database.updateXOperation(updated.logicalId, {
           status: "publishing",
-          providerId: updated.providerId ?? targetPostId,
+          providerId: updated.providerId ?? resolvedTargetPostId,
           error: updated.error,
         });
         trackProviderPoll(this.database, pollable, new Date());
@@ -233,12 +248,12 @@ export class ZernioWriteService {
       }
       const updated = this.database.updateXOperation(operation.logicalId, {
         status,
-        ...(status === "publishing" && targetPostId
-          ? { providerId: targetPostId }
+        ...(status === "publishing" && resolvedTargetPostId
+          ? { providerId: resolvedTargetPostId }
           : {}),
         error: message,
       });
-      if (status === "publishing" && targetPostId)
+      if (status === "publishing" && resolvedTargetPostId)
         trackProviderPoll(this.database, updated, new Date());
       return updated;
     }

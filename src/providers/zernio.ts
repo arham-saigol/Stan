@@ -145,11 +145,16 @@ export class ZernioProvider implements ZernioMutationProvider {
     return data;
   }
 
-  private async resolveProviderPostId(
+  async resolveProviderPostId(
     postId: string,
     accountId: string,
   ): Promise<string> {
     const post = await this.resolvePost(postId, accountId);
+    if (!this.postBelongsToAccount(post, accountId)) {
+      throw new Error(
+        "The target post does not belong to the configured X account",
+      );
+    }
     if (!post._id) throw new Error("Zernio returned a post without an ID");
     return post._id;
   }

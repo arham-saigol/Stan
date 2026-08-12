@@ -89,12 +89,12 @@ function isProcessRunning(pid: number): boolean {
 }
 
 export async function installAutostart(root: string): Promise<void> {
-  const wasRunning = Boolean(await getDaemonStatus(root));
-  if (wasRunning) await stopService(root);
+  const previous = await getDaemonStatus(root);
   try {
+    if (previous) await stopService(root);
     if (process.platform === "win32") {
       await installWindowsTask(root);
-      if (wasRunning) await startService(root);
+      if (previous) await startService(root);
       return;
     }
     if (process.platform === "linux")
@@ -103,9 +103,25 @@ export async function installAutostart(root: string): Promise<void> {
       "Autostart installation supports Windows and systemd Linux",
     );
   } catch (error) {
-    if (wasRunning) await startService(root).catch(() => undefined);
+    if (previous) await restoreRunningService(root, previous.pid);
     throw error;
   }
+}
+
+async function restoreRunningService(root: string, previousPid: number) {
+  const current = await getDaemonStatus(root);
+  if (current?.status === "running") return;
+  if (
+    current?.status === "stopping" ||
+    (!current && isProcessRunning(previousPid))
+  ) {
+    const deadline = Date.now() + DRAIN_TIMEOUT_MS;
+    while (Date.now() < deadline && isProcessRunning(previousPid)) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+    }
+  }
+  if (!isProcessRunning(previousPid))
+    await startService(root).catch(() => undefined);
 }
 
 async function installSystemdUserService(root: string): Promise<void> {
