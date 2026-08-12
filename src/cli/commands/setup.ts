@@ -12,7 +12,7 @@ import { initializeStateRoot, statePaths } from "../../state.ts";
 import { ApplicationDatabase } from "../../storage/application-db.ts";
 import { WorkspaceStore } from "../../workspace/store.ts";
 import { authenticateCodexAndSelect } from "./auth.ts";
-import { hasUnsettledDestructiveWrites } from "./apis-auth.ts";
+import { hasTrackedZernioWrites } from "./apis-auth.ts";
 import { installAutostart } from "./service.ts";
 import { authenticateWhatsApp } from "./whatsapp-auth.ts";
 
@@ -71,10 +71,10 @@ export async function setupCommand(root: string): Promise<void> {
     if (
       apiValues.zernioApiKey &&
       apiValues.zernioApiKey !== existingCredentials?.zernioApiKey &&
-      hasUnsettledDestructiveWrites(root)
+      hasTrackedZernioWrites(root)
     ) {
       throw new Error(
-        "Cannot rotate Zernio credentials while an X cancel or delete is still being verified",
+        "Cannot rotate Zernio credentials while an X operation is still being tracked",
       );
     }
     if (candidateXQuik) await new XQuikProvider(candidateXQuik).health();

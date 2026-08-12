@@ -264,6 +264,54 @@ describe("declarative automations", () => {
     database.close();
   });
 
+  it("registers the routed session for multi-day automation catch-up", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-automation-catch-up-"));
+    const config = new ConfigStore(root);
+    const initial = createDefaultConfig({ ownerPhone: "+923001234567" });
+    await config.write({
+      ...initial,
+      heartbeat: { ...initial.heartbeat, enabled: false },
+    });
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const automations = new AutomationStore(database);
+    automations.create({
+      name: "missed report",
+      schedule: { type: "once", at: "2026-08-13T04:00:00Z" },
+      instruction: "Prepare the report",
+      deliveryMode: "silent",
+      creatorMessageId: "owner-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const scheduler = new Scheduler(
+      database,
+      config,
+      {
+        isBusy: () => false,
+        dispatch: vi.fn(async () => "submission-1"),
+        read: vi.fn(async () => "finished report"),
+      } as unknown as StanAgentRuntime,
+      { sendOwner: vi.fn() } as unknown as DeliveryService,
+      automations,
+      pino({ level: "silent" }),
+    );
+
+    await scheduler.tick(Temporal.Instant.from("2026-08-15T04:00:00Z"));
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT local_date, conversation_id, state FROM daily_sessions WHERE local_date = '2026-08-13'",
+        )
+        .get(),
+    ).toEqual({
+      local_date: "2026-08-13",
+      conversation_id: "stan-owner-2026-08-13",
+      state: "active",
+    });
+    database.close();
+  });
+
   it("bounds persistent automation notification failures", async () => {
     const root = await mkdtemp(
       join(tmpdir(), "stan-automation-notify-failure-"),

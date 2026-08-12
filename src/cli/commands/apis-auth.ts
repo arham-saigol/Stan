@@ -69,10 +69,10 @@ export async function apisAuthCommand(root: string): Promise<void> {
     if (
       updates.zernioApiKey &&
       updates.zernioApiKey !== existingCredentials?.zernioApiKey &&
-      hasUnsettledDestructiveWrites(root)
+      hasTrackedZernioWrites(root)
     ) {
       throw new Error(
-        "Cannot rotate Zernio credentials while an X cancel or delete is still being verified",
+        "Cannot rotate Zernio credentials while an X operation is still being tracked",
       );
     }
     if (selectedXAccountId) {
@@ -94,7 +94,7 @@ export async function apisAuthCommand(root: string): Promise<void> {
   }
 }
 
-export function hasUnsettledDestructiveWrites(root: string): boolean {
+export function hasTrackedZernioWrites(root: string): boolean {
   const path = statePaths(root).applicationDb;
   if (!existsSync(path)) return false;
   const database = new DatabaseSync(path, {
@@ -102,13 +102,7 @@ export function hasUnsettledDestructiveWrites(root: string): boolean {
   });
   try {
     return Boolean(
-      database
-        .prepare(
-          `SELECT 1 FROM scheduled_publications s
-           JOIN x_operations x ON x.logical_id = s.logical_operation_id
-           WHERE x.operation IN ('cancel', 'delete') LIMIT 1`,
-        )
-        .get(),
+      database.prepare("SELECT 1 FROM scheduled_publications LIMIT 1").get(),
     );
   } finally {
     database.close();

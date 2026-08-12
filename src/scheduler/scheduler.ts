@@ -410,6 +410,14 @@ export class Scheduler {
       let reply: string;
       try {
         const sessionId = dailySessionId(run.scheduledFor);
+        const sessionDate = pakistanRoutingDate(run.scheduledFor);
+        this.database.database
+          .prepare(
+            `INSERT INTO daily_sessions(local_date, conversation_id, state, created_at)
+             VALUES (?, ?, 'active', ?) ON CONFLICT(local_date) DO UPDATE SET
+             state = 'active', closed_at = NULL, transcript_complete = 0`,
+          )
+          .run(sessionDate, sessionId, currentDate.toISOString());
         const submissionId =
           run.submissionId ??
           (await this.agent.dispatch(

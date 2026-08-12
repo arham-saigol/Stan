@@ -26,6 +26,26 @@ describe("bounded workspace", () => {
     expect(history).toHaveLength(1);
   });
 
+  it("recovers the same workspace edit without applying it twice", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-workspace-"));
+    const store = new WorkspaceStore(root, { maxBytes: 1024 });
+    await store.initialize();
+
+    const first = await store.edit(
+      "goals",
+      { operation: "append", text: "\nonce" },
+      "owner-1",
+    );
+    const recovered = await store.edit(
+      "goals",
+      { operation: "append", text: "\nonce" },
+      "owner-1",
+    );
+
+    expect(recovered).toBe(first);
+    expect(await store.read("goals")).toMatch(/\nonce$/);
+  });
+
   it("serializes concurrent edits so one accepted change cannot overwrite another", async () => {
     const root = await mkdtemp(join(tmpdir(), "stan-workspace-"));
     const store = new WorkspaceStore(root, { maxBytes: 1024 });

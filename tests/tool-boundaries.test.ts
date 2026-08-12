@@ -94,7 +94,9 @@ describe("trusted tool boundaries", () => {
     await expect((tool.run as Run)({ data })).resolves.toMatchObject({
       output: { file: "goals", content: "updated" },
     });
-    await expect((tool.run as Run)({ data })).rejects.toThrow(/authorization/i);
+    await expect((tool.run as Run)({ data })).resolves.toMatchObject({
+      output: { file: "goals", content: "updated" },
+    });
     expect(edit).toHaveBeenCalledOnce();
     database.close();
   });

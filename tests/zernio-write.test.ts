@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { hasUnsettledDestructiveWrites } from "../src/cli/commands/apis-auth.ts";
+import { hasTrackedZernioWrites } from "../src/cli/commands/apis-auth.ts";
 import { ApplicationDatabase } from "../src/storage/application-db.ts";
 import {
   ZernioWriteService,
@@ -317,7 +317,7 @@ describe("Zernio public-write boundary", () => {
       }),
     );
     database.close();
-    expect(hasUnsettledDestructiveWrites(root)).toBe(true);
+    expect(hasTrackedZernioWrites(root)).toBe(true);
   });
 
   it("rejects a destructive target other than the one the owner authorized", async () => {

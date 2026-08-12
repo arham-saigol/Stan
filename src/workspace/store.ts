@@ -95,22 +95,51 @@ export class WorkspaceStore {
     edit: WorkspaceEdit,
     sourceMessageId: string,
   ): Promise<string> {
+    const recovered = await this.recoverEdit(file, edit, sourceMessageId);
+    if (recovered !== undefined) return recovered;
     const current = await this.read(file);
+    const next = this.editedContent(current, edit);
+    await this.backup(file, current, sourceMessageId);
+    await atomicWritePrivate(await this.assertSafe(file), next);
+    return next;
+  }
+
+  private async recoverEdit(
+    file: WorkspaceFile,
+    edit: WorkspaceEdit,
+    sourceMessageId: string,
+  ): Promise<string | undefined> {
+    const entries = JSON.parse(
+      await readFile(join(this.root, ".history", "index.json"), "utf8"),
+    ) as HistoryEntry[];
+    const prior = entries.find(
+      (entry) =>
+        entry.sourceMessageId === sourceMessageId && entry.file === file,
+    );
+    if (!prior) return undefined;
+    const before = await readFile(
+      join(this.root, ".history", prior.backup),
+      "utf8",
+    );
+    const expected = this.editedContent(before, edit);
+    if ((await this.read(file)) === before)
+      await atomicWritePrivate(await this.assertSafe(file), expected);
+    return expected;
+  }
+
+  private editedContent(current: string, edit: WorkspaceEdit): string {
     let next: string;
     if (edit.operation === "replace") {
       const first = current.indexOf(edit.oldText);
       const last = current.lastIndexOf(edit.oldText);
-      if (!edit.oldText || first < 0 || first !== last) {
+      if (!edit.oldText || first < 0 || first !== last)
         throw new Error("Replacement oldText must occur exactly once");
-      }
       next = `${current.slice(0, first)}${edit.text}${current.slice(first + edit.oldText.length)}`;
     } else {
       next = `${current}${edit.text}`;
     }
     if (Buffer.byteLength(next) > this.maxBytes)
       throw new Error("Workspace edit exceeds the configured size limit");
-    await this.backup(file, current, sourceMessageId);
-    await atomicWritePrivate(await this.assertSafe(file), next);
     return next;
   }
 

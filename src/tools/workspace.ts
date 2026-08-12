@@ -50,10 +50,13 @@ export function workspaceTools(
         const source = trusted.sourceMessageId;
         if (data.operation === "replace" && data.oldText === undefined)
           throw new Error("A replace edit requires oldText");
-        database.consumeWorkspaceAuthorization(
+        const payload = workspaceMutationPayload(data);
+        const previous = database.beginWorkspaceEdit(
           trusted.sourceMessageId,
-          workspaceMutationPayload(data),
+          payload,
         );
+        if (previous !== undefined)
+          return { output: { file: data.file, content: previous } };
         const edit =
           data.operation === "replace"
             ? {
@@ -62,12 +65,9 @@ export function workspaceTools(
                 text: data.text,
               }
             : { operation: "append" as const, text: data.text };
-        return {
-          output: {
-            file: data.file,
-            content: await workspace.edit(data.file, edit, source),
-          },
-        };
+        const content = await workspace.edit(data.file, edit, source);
+        database.finishWorkspaceEdit(trusted.sourceMessageId, payload, content);
+        return { output: { file: data.file, content } };
       },
     }),
   ];
