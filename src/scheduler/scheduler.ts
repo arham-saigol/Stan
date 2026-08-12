@@ -251,7 +251,7 @@ export class Scheduler {
           const suppression = proactiveDecision(
             this.database,
             message,
-            occurrence.anchorDate,
+            pakistanRoutingDate(occurrence.scheduledFor),
           );
           if (suppression) {
             this.database.database

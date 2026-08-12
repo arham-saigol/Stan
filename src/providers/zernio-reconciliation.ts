@@ -174,8 +174,8 @@ export async function reconcileScheduledPublications(
         Boolean(post.scheduledFor) &&
         !sameInstant(post.scheduledFor!, expectedSchedule)) ||
         Boolean(row.operation_error?.includes("owner-authorized instant")));
-    let driftCancelled = false;
-    if (scheduleMismatch && provider.mutate) {
+    let driftCancelled = scheduleMismatch && observed === "cancelled";
+    if (scheduleMismatch && observed !== "cancelled" && provider.mutate) {
       try {
         const cancellation = await provider.mutate({
           requestId: `schedule-drift:${row.logical_operation_id}`,

@@ -136,6 +136,72 @@ describe("heartbeat execution", () => {
     database.close();
   });
 
+  it("applies the notification budget to the routed post-midnight day", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-heartbeat-budget-"));
+    const config = new ConfigStore(root);
+    const initial = createDefaultConfig({ ownerPhone: "+923001234567" });
+    await config.write({
+      ...initial,
+      heartbeat: {
+        ...initial.heartbeat,
+        startTime: "23:30",
+        endTime: "00:30",
+        intervalMinutes: 30,
+      },
+    });
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    for (const minute of ["00:05", "00:15"]) {
+      database.database
+        .prepare(
+          `INSERT INTO heartbeat_occurrences(occurrence_id, local_date, scheduled_for, kind, status, notify, message, created_at, updated_at)
+           VALUES (?, '2026-08-14', ?, 'regular', 'notified', 1, ?, ?, ?)`,
+        )
+        .run(
+          `prior:${minute}`,
+          `2026-08-13T19:${minute.slice(3)}:00Z`,
+          `Prior suggestion ${minute}`,
+          "2026-08-13T19:00:00Z",
+          "2026-08-13T19:00:00Z",
+        );
+    }
+    const deliver = vi.fn(
+      async (_id: string, message: { attributes?: Record<string, string> }) => {
+        database.database
+          .prepare(
+            "UPDATE heartbeat_occurrences SET status = 'ready', notify = 1, message = ? WHERE occurrence_id = ?",
+          )
+          .run("A third interruption", message.attributes!.occurrenceId!);
+        return "A third interruption";
+      },
+    );
+    const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
+    const scheduler = new Scheduler(
+      database,
+      config,
+      heartbeatRuntime(deliver),
+      { sendOwner } as unknown as DeliveryService,
+      new AutomationStore(database),
+      pino({ level: "silent" }),
+    );
+
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T19:30:00Z"));
+
+    expect(sendOwner).not.toHaveBeenCalled();
+    expect(
+      database.database
+        .prepare(
+          "SELECT local_date, status, reason FROM heartbeat_occurrences WHERE occurrence_id = 'heartbeat:2026-08-13:2026-08-14:00:30'",
+        )
+        .get(),
+    ).toEqual({
+      local_date: "2026-08-14",
+      status: "silent",
+      reason: "notification_budget",
+    });
+    database.close();
+  });
+
   it("retries a regular heartbeat notification without rerunning the agent", async () => {
     const root = await mkdtemp(join(tmpdir(), "stan-heartbeat-retry-"));
     const config = new ConfigStore(root);

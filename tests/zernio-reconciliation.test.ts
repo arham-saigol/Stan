@@ -1,3 +1,4 @@
+import type { Post } from "@zernio/node";
 import { describe, expect, it, vi } from "vitest";
 import type { DeliveryService } from "../src/gateway/delivery.ts";
 import { reconcilePendingXOperations } from "../src/providers/zernio-operation-reconciliation.ts";
@@ -950,6 +951,85 @@ describe("ambiguous Zernio operation reconciliation", () => {
         request: { operation: "cancel", providerPostId: "z-1" },
       }),
     );
+    expect(sendOwner).toHaveBeenCalledOnce();
+    database.close();
+  });
+
+  it("settles drift reconciliation when polling observes cancellation", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-drift-cancelled",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "schedule it",
+      receivedAt: "2026-08-13T00:00:00Z",
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-drift-cancelled",
+      operation: "schedule",
+      authorizedContent: "hello",
+      authorizedScheduledFor: "2026-08-14T00:00:00.000Z",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const posts = [
+      {
+        status: "scheduled" as const,
+        scheduledFor: "2026-08-14T01:00:00Z",
+        platforms: [
+          { platform: "twitter" as const, status: "scheduled" as const },
+        ],
+      },
+      {
+        status: "cancelled" as const,
+        platforms: [
+          { platform: "twitter" as const, status: "cancelled" as const },
+        ],
+      },
+    ];
+    const provider = {
+      mutate: vi.fn(async (input: { request: { operation: string } }) => {
+        if (input.request.operation === "cancel")
+          throw new Error("ambiguous cancellation");
+        return {
+          status: "scheduled" as const,
+          providerId: "z-1",
+          scheduledFor: "2026-08-14T00:00:00Z",
+        };
+      }),
+      getPost: vi.fn(async () => posts.shift()! as unknown as Post),
+    };
+    const operation = await new ZernioWriteService(database, provider).execute(
+      {
+        sourceMessageId: "owner-drift-cancelled",
+        selectedAccountId: "account-1",
+      },
+      {
+        operation: "schedule",
+        content: "hello",
+        scheduledFor: "2026-08-14T00:00:00Z",
+      },
+    );
+    setOperationCreatedAt(database, operation.logicalId);
+    const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
+    const delivery = { sendOwner } as unknown as DeliveryService;
+
+    await reconcileScheduledPublications(
+      database,
+      provider,
+      delivery,
+      new Date("2026-08-13T00:02:00Z"),
+    );
+    await reconcileScheduledPublications(
+      database,
+      provider,
+      delivery,
+      new Date("2026-08-13T00:07:00Z"),
+    );
+
+    const resolved = database.getXOperation(operation.logicalId)!;
+    expect(resolved.status).toBe("partial");
+    expect(resolved.error).toMatch(/unauthorized schedule was cancelled/i);
+    expect(provider.mutate).toHaveBeenCalledTimes(2);
     expect(sendOwner).toHaveBeenCalledOnce();
     database.close();
   });
