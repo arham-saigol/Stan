@@ -373,8 +373,8 @@ describe("declarative automations", () => {
     database.close();
   });
 
-  it("retains an active deleted run and suppresses its owner delivery", async () => {
-    const root = await mkdtemp(join(tmpdir(), "stan-automation-delete-"));
+  it("suppresses an in-flight automation reply after the job is paused", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-automation-pause-"));
     const config = new ConfigStore(root);
     const initial = createDefaultConfig({ ownerPhone: "+923001234567" });
     await config.write({
@@ -417,7 +417,7 @@ describe("declarative automations", () => {
       Temporal.Instant.from("2026-08-13T04:00:00Z"),
     );
     await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
-    expect(automations.delete(automation.id)).toBe(true);
+    expect(automations.setEnabled(automation.id, false).enabled).toBe(false);
     releaseRead("finished report");
     await ticking;
 
@@ -428,7 +428,7 @@ describe("declarative automations", () => {
           "SELECT status, result FROM automation_runs WHERE automation_id = ?",
         )
         .get(automation.id),
-    ).toEqual({ status: "completed", result: "finished report" });
+    ).toEqual({ status: "failed", result: null });
     database.close();
   });
 

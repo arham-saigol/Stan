@@ -26,7 +26,6 @@ export const ConfigSchema = v.strictObject({
       "medium",
       "high",
       "xhigh",
-      "max",
     ]),
   }),
   heartbeat: v.strictObject({

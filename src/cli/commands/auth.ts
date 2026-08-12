@@ -20,9 +20,14 @@ export async function authenticateCodexAndSelect(
     })),
   });
   const model = models.find((candidate) => candidate.id === modelId)!;
+  const thinkingLevels = model.thinkingLevels.filter(
+    (level) => level !== "max",
+  );
+  if (!thinkingLevels.length)
+    throw new Error("This model has no Flue-compatible thinking levels");
   const thinkingLevel = await select({
     message: "Thinking level",
-    choices: model.thinkingLevels.map((level) => ({
+    choices: thinkingLevels.map((level) => ({
       value: level,
       name: level,
     })),

@@ -7,7 +7,6 @@ import {
   useSkill,
   useTool,
   type DeliveredMessage,
-  type ThinkingLevel,
 } from "@flue/runtime";
 import { stanSkill, voiceSkill } from "../skills/index.ts";
 import {
@@ -38,9 +37,9 @@ export function Stan() {
   const config = environment.config.read();
   const delivery = useDelivery();
   const trusted = classifyDelivery(delivery);
-  const thinkingLevel: ThinkingLevel =
-    config.model.thinkingLevel === "max" ? "xhigh" : config.model.thinkingLevel;
-  useModel(`${config.model.provider}/${config.model.id}`, { thinkingLevel });
+  useModel(`${config.model.provider}/${config.model.id}`, {
+    thinkingLevel: config.model.thinkingLevel,
+  });
   useSkill(voiceSkill);
   useSkill(stanSkill);
 

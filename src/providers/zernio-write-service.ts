@@ -77,6 +77,49 @@ export class ZernioWriteService {
       !targetPostId?.trim()
     )
       throw new Error("A target X post ID is required");
+    const content = getContent(request);
+    const scheduledFor =
+      request.operation === "schedule"
+        ? normalizeScheduledFor(request.scheduledFor)
+        : undefined;
+    const payloadHash = hashPayload({
+      accountId: context.selectedAccountId,
+      request,
+    });
+    const begin = () =>
+      this.database.beginXOperation({
+        envelopeId: envelope.id,
+        sourceMessageId: context.sourceMessageId,
+        operation: request.operation as AuthorizationOperation,
+        payloadHash,
+        accountId: context.selectedAccountId,
+        requestJson: stableJson(request),
+        ...(targetPostId ? { targetPostId } : {}),
+        ...(content ? { content } : {}),
+        ...(scheduledFor ? { scheduledFor } : {}),
+      });
+    const existing = this.database.getXOperationByEnvelope(envelope.id);
+    let recovered: XOperation | undefined;
+    if (existing) {
+      recovered = begin();
+      if (isTerminal(recovered.status)) return recovered;
+      if (recovered.providerId) {
+        trackProviderPoll(this.database, recovered, new Date());
+        return recovered;
+      }
+      if (recovered.nextRetryAt || isRetryableCreate(recovered.operation)) {
+        if (!recovered.nextRetryAt) {
+          const recoveredAt = new Date().toISOString();
+          this.database.database
+            .prepare(
+              "UPDATE x_operations SET next_retry_at = ?, updated_at = ? WHERE logical_id = ?",
+            )
+            .run(recoveredAt, recoveredAt, recovered.logicalId);
+          recovered = this.database.getXOperation(recovered.logicalId)!;
+        }
+        return recovered;
+      }
+    }
     let resolvedTargetPostId = targetPostId;
     if ("providerPostId" in request && targetPostId) {
       if (this.provider.resolveProviderPostId) {
@@ -102,53 +145,14 @@ export class ZernioWriteService {
         }
       }
     }
-    const content = getContent(request);
-    const scheduledFor =
-      request.operation === "schedule"
-        ? normalizeScheduledFor(request.scheduledFor)
-        : undefined;
-    const payloadHash = hashPayload({
-      accountId: context.selectedAccountId,
-      request,
-    });
-    const begin = () =>
-      this.database.beginXOperation({
-        envelopeId: envelope.id,
-        sourceMessageId: context.sourceMessageId,
-        operation: request.operation as AuthorizationOperation,
-        payloadHash,
-        accountId: context.selectedAccountId,
-        requestJson: stableJson(request),
-        ...(targetPostId ? { targetPostId } : {}),
-        ...(content ? { content } : {}),
-        ...(scheduledFor ? { scheduledFor } : {}),
+    if (recovered && resolvedTargetPostId) {
+      recovered = this.database.updateXOperation(recovered.logicalId, {
+        status: "publishing",
+        providerId: resolvedTargetPostId,
+        error: "Provider call outcome was not recorded before recovery",
       });
-    const existing = this.database.getXOperationByEnvelope(envelope.id);
-    if (existing) {
-      let operation = begin();
-      if (
-        operation.status === "publishing" &&
-        !operation.providerId &&
-        !operation.nextRetryAt
-      ) {
-        if (isRetryableCreate(operation.operation)) {
-          const recoveredAt = new Date().toISOString();
-          this.database.database
-            .prepare(
-              "UPDATE x_operations SET next_retry_at = ?, updated_at = ? WHERE logical_id = ?",
-            )
-            .run(recoveredAt, recoveredAt, operation.logicalId);
-          operation = this.database.getXOperation(operation.logicalId)!;
-        } else if (resolvedTargetPostId) {
-          operation = this.database.updateXOperation(operation.logicalId, {
-            status: "publishing",
-            providerId: resolvedTargetPostId,
-            error: "Provider call outcome was not recorded before recovery",
-          });
-          trackProviderPoll(this.database, operation, new Date());
-        }
-      }
-      return operation;
+      trackProviderPoll(this.database, recovered, new Date());
+      return recovered;
     }
     if (
       request.operation === "schedule" &&

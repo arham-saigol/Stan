@@ -276,6 +276,16 @@ export class AutomationStore {
     }));
   }
 
+  isRunActive(occurrenceId: string): boolean {
+    return Boolean(
+      this.application.database
+        .prepare(
+          "SELECT 1 FROM automation_runs WHERE occurrence_id = ? AND status IN ('unknown', 'leased', 'running')",
+        )
+        .get(occurrenceId),
+    );
+  }
+
   setSubmission(
     occurrenceId: string,
     submissionId: string,

@@ -46,6 +46,19 @@ describe("configuration", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("rejects thinking levels unsupported by the Flue runtime", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-config-"));
+    const store = new ConfigStore(root);
+    const config = createDefaultConfig({ ownerPhone: "+923001234567" });
+
+    await expect(
+      store.write({
+        ...config,
+        model: { ...config.model, thinkingLevel: "max" },
+      }),
+    ).rejects.toThrow(/received "max"/i);
+  });
+
   it("serializes concurrent read-modify-write updates", async () => {
     const root = await mkdtemp(join(tmpdir(), "stan-config-"));
     const store = new ConfigStore(root);

@@ -161,10 +161,16 @@ describe("owner X authorization classification", () => {
     expect(deriveMemoryAuthorization("What do you remember?")).toBeUndefined();
   });
 
-  it("does not derive an X write from an automation confirmation", () => {
+  it("does not derive an X write from non-X mutation commands", () => {
     expect(
       deriveAuthorizationOperation(
         'schedule automation: {"name":"x post research","at":"2099-08-13T04:00:00Z"}',
+      ),
+    ).toBeUndefined();
+    expect(
+      deriveAuthorization(
+        'edit workspace: {"file":"playbook","operation":"append","text":"Review X post https://x.com/u/status/123"}',
+        "Public replacement text",
       ),
     ).toBeUndefined();
   });

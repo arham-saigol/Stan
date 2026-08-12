@@ -42,7 +42,9 @@ export function deriveAuthorizationOperation(
 ): AuthorizationOperation | undefined {
   const normalized = text.trim().replace(prefixes, "");
   if (
-    /^(?:create|schedule|pause|enable|delete)\s+automation\b/i.test(normalized)
+    /^(?:(?:create|add|schedule)\s+automation|set\s+up\s+automation|(?:pause|disable|enable|resume|delete|remove)\s+automation\b|edit\s+workspace\b|update\s+heartbeat\b|forget\s+memory\b|remember\s*:)/i.test(
+      normalized,
+    )
   )
     return undefined;
   const match = command.exec(normalized);

@@ -327,6 +327,48 @@ describe("Zernio public-write boundary", () => {
     expect(hasTrackedZernioWrites(root)).toBe(true);
   });
 
+  it("returns a persisted deletion without resolving the removed target again", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-delete",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "delete X post 1900123456789",
+      receivedAt: new Date().toISOString(),
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-delete",
+      operation: "delete",
+      targetPostId: "1900123456789",
+    });
+    const resolveProviderPostId = vi
+      .fn()
+      .mockResolvedValueOnce("z-1")
+      .mockRejectedValueOnce(new Error("post not found"));
+    const mutate = vi.fn(async () => ({ status: "cancelled" as const }));
+    const service = new ZernioWriteService(database, {
+      mutate,
+      resolveProviderPostId,
+    });
+    const context = {
+      sourceMessageId: "owner-delete",
+      selectedAccountId: "account-1",
+    };
+    const request = {
+      operation: "delete" as const,
+      providerPostId: "1900123456789",
+    };
+
+    const first = await service.execute(context, request);
+    const replayed = await service.execute(context, request);
+
+    expect(replayed).toEqual(first);
+    expect(first.status).toBe("cancelled");
+    expect(resolveProviderPostId).toHaveBeenCalledOnce();
+    expect(mutate).toHaveBeenCalledOnce();
+    database.close();
+  });
+
   it("rejects a destructive target other than the one the owner authorized", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

@@ -448,6 +448,7 @@ export class Scheduler {
         );
         continue;
       }
+      if (!this.automations.isRunActive(run.occurrenceId)) continue;
       const output = reply.slice(0, 12_000);
       if (
         run.automation.deliveryMode === "owner_whatsapp" &&
