@@ -330,6 +330,27 @@ describe("owner-only ingress", () => {
     });
   });
 
+  it("preserves the original authorization window when recovering a claimed message", async () => {
+    const { ingress, database } = await harness();
+    database.claimInbound({
+      id: "recovered-approval",
+      senderIdentity: ownerJid,
+      body: "Please post the quoted draft",
+      quotedText: "Option 2",
+      receivedAt: "2026-08-13T09:00:00.000Z",
+      admittedAt: "2026-08-13T09:00:00.000Z",
+    });
+
+    await ingress.reconcilePending(5, new Date("2026-08-13T10:00:00.000Z"));
+
+    expect(
+      database.getAuthorizationForSource("recovered-approval"),
+    ).toMatchObject({
+      createdAt: "2026-08-13T09:00:00.000Z",
+      expiresAt: "2026-08-13T09:15:00.000Z",
+    });
+  });
+
   it("creates a transcript session for a delayed missed-day message", async () => {
     const { ingress, database } = await harness();
 

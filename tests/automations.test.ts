@@ -425,7 +425,7 @@ describe("declarative automations", () => {
     database.close();
   });
 
-  it("prunes only completed automation runs beyond retention", () => {
+  it("prunes completed and failed automation runs beyond retention", () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
     const store = new AutomationStore(database);
@@ -466,17 +466,14 @@ describe("declarative automations", () => {
       "2026-08-12T00:00:00Z",
     );
 
-    expect(store.pruneCompleted(new Date("2026-07-01T00:00:00Z"))).toBe(1);
+    expect(store.pruneCompleted(new Date("2026-07-01T00:00:00Z"))).toBe(2);
     expect(
       database.database
         .prepare(
           "SELECT occurrence_id FROM automation_runs ORDER BY occurrence_id",
         )
         .all(),
-    ).toEqual([
-      { occurrence_id: "old-failed" },
-      { occurrence_id: "recent-completed" },
-    ]);
+    ).toEqual([{ occurrence_id: "recent-completed" }]);
     database.close();
   });
 

@@ -316,7 +316,7 @@ export class AutomationStore {
       const changes = Number(
         this.application.database
           .prepare(
-            "DELETE FROM automation_runs WHERE status = 'completed' AND updated_at < ?",
+            "DELETE FROM automation_runs WHERE status IN ('completed', 'failed') AND updated_at < ?",
           )
           .run(before.toISOString()).changes,
       );

@@ -97,6 +97,45 @@ describe("heartbeat execution", () => {
     database.close();
   });
 
+  it("attributes post-midnight heartbeats to their routed session day", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-heartbeat-routing-"));
+    const config = new ConfigStore(root);
+    const initial = createDefaultConfig({ ownerPhone: "+923001234567" });
+    await config.write({
+      ...initial,
+      heartbeat: {
+        ...initial.heartbeat,
+        startTime: "23:30",
+        endTime: "00:30",
+        intervalMinutes: 30,
+      },
+    });
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const scheduler = new Scheduler(
+      database,
+      config,
+      heartbeatRuntime(
+        async () => "",
+        () => true,
+      ),
+      { sendOwner: vi.fn() } as unknown as DeliveryService,
+      new AutomationStore(database),
+      pino({ level: "silent" }),
+    );
+
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T19:30:00Z"));
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT local_date FROM heartbeat_occurrences WHERE occurrence_id = 'heartbeat:2026-08-13:00:30'",
+        )
+        .get(),
+    ).toEqual({ local_date: "2026-08-14" });
+    database.close();
+  });
+
   it("retries a regular heartbeat notification without rerunning the agent", async () => {
     const root = await mkdtemp(join(tmpdir(), "stan-heartbeat-retry-"));
     const config = new ConfigStore(root);

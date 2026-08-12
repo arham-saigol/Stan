@@ -90,6 +90,7 @@ export class OwnerIngress {
         );
     }
     if (!message.text.trim()) return { status: "ignored" };
+    const admittedAt = this.now();
     const claimed = this.database.claimInbound({
       id: message.id,
       senderIdentity: ownerIdentity,
@@ -98,16 +99,17 @@ export class OwnerIngress {
         ? {}
         : { quotedText: message.quotedText }),
       receivedAt: message.receivedAt,
+      admittedAt: admittedAt.toISOString(),
     });
     if (!claimed) return { status: "duplicate" };
 
-    return this.enqueueProcess(message, undefined, undefined, this.now());
+    return this.enqueueProcess(message, undefined, undefined, admittedAt);
   }
 
   async reconcilePending(limit = 5, now = new Date()): Promise<number> {
     const rows = this.database.database
       .prepare(
-        `SELECT provider_message_id, sender_identity, body, quoted_text, received_at, session_id, flue_submission_id
+        `SELECT provider_message_id, sender_identity, body, quoted_text, received_at, admitted_at, session_id, flue_submission_id
          FROM inbound_messages
          WHERE state IN ('claimed', 'dispatched', 'failed', 'unknown') AND response_text IS NULL
            AND recovery_attempts < 3 AND (next_retry_at IS NULL OR next_retry_at <= ?)
@@ -119,6 +121,7 @@ export class OwnerIngress {
       body: string;
       quoted_text: string | null;
       received_at: string;
+      admitted_at: string;
       session_id: string | null;
       flue_submission_id: string | null;
     }[];
@@ -142,7 +145,7 @@ export class OwnerIngress {
         },
         row.session_id ?? undefined,
         row.flue_submission_id ?? undefined,
-        now,
+        new Date(row.admitted_at),
       );
       processed += 1;
     }

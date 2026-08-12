@@ -7,7 +7,7 @@ import type { DeliveryService } from "../gateway/delivery.ts";
 import type { ApplicationDatabase } from "../storage/application-db.ts";
 import type { AutomationStore } from "./automations.ts";
 import { dueHeartbeat } from "./heartbeat.ts";
-import { dailySessionId } from "./rollover.ts";
+import { dailySessionId, pakistanRoutingDate } from "./rollover.ts";
 import { proactiveDecision, recordProactiveSuggestion } from "./proactive.ts";
 
 export class Scheduler {
@@ -159,7 +159,7 @@ export class Scheduler {
       )
       .run(
         occurrence.id,
-        occurrence.anchorDate,
+        pakistanRoutingDate(occurrence.scheduledFor),
         occurrence.scheduledFor,
         occurrence.kind,
         status,

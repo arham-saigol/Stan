@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS inbound_messages (
   body TEXT NOT NULL,
   quoted_text TEXT,
   received_at TEXT NOT NULL,
+  admitted_at TEXT NOT NULL,
   state TEXT NOT NULL CHECK (state IN ('claimed', 'dispatched', 'reply_pending', 'delivered', 'failed', 'unknown')),
   session_id TEXT,
   flue_submission_id TEXT,
@@ -280,6 +281,17 @@ export class ApplicationDatabase {
       addColumnIfMissing(
         this.database,
         "inbound_messages",
+        "admitted_at",
+        "TEXT",
+      );
+      this.database
+        .prepare(
+          "UPDATE inbound_messages SET admitted_at = MIN(received_at, ?) WHERE admitted_at IS NULL",
+        )
+        .run(new Date().toISOString());
+      addColumnIfMissing(
+        this.database,
+        "inbound_messages",
         "recovery_attempts",
         "INTEGER NOT NULL DEFAULT 0",
       );
@@ -432,6 +444,7 @@ export class ApplicationDatabase {
     body: string;
     quotedText?: string;
     receivedAt: string;
+    admittedAt?: string;
   }): boolean {
     return this.transaction(() => {
       if (
@@ -444,8 +457,8 @@ export class ApplicationDatabase {
         return false;
       this.database
         .prepare(
-          `INSERT INTO inbound_messages(provider_message_id, sender_identity, body, quoted_text, received_at, state)
-           VALUES (?, ?, ?, ?, ?, 'claimed')`,
+          `INSERT INTO inbound_messages(provider_message_id, sender_identity, body, quoted_text, received_at, admitted_at, state)
+           VALUES (?, ?, ?, ?, ?, ?, 'claimed')`,
         )
         .run(
           input.id,
@@ -453,6 +466,7 @@ export class ApplicationDatabase {
           input.body,
           input.quotedText ?? null,
           input.receivedAt,
+          input.admittedAt ?? new Date().toISOString(),
         );
       return true;
     });
