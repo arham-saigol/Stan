@@ -158,6 +158,33 @@ describe("durable memory ingestion", () => {
     database.close();
   });
 
+  it("retries immediate provider-reported ingestion failures", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const memory = {
+      ingestSession: vi.fn(async () => ({
+        id: "memory-1",
+        status: "failed",
+      })),
+    } as unknown as SupermemoryProvider;
+
+    await ingestPendingMemory(database, memory, input);
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT provider_id, status, attempts, failure_attempts, next_attempt_at FROM memory_documents",
+        )
+        .get(),
+    ).toMatchObject({
+      provider_id: null,
+      status: "pending",
+      attempts: 1,
+      failure_attempts: 1,
+    });
+    database.close();
+  });
+
   it("bounds retries when accepted provider documents later fail", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

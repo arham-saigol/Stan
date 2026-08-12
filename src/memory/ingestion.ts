@@ -48,6 +48,21 @@ export async function ingestPendingMemory(
   const customId = `stan-session-${input.localDate}`;
   try {
     const result = await memory.ingestSession(input);
+    if (result.status === "failed") {
+      database.database
+        .prepare(
+          `UPDATE memory_documents SET provider_id = NULL, status = CASE WHEN failure_attempts + 1 >= 3 THEN 'failed' ELSE 'pending' END,
+           attempts = attempts + 1, failure_attempts = failure_attempts + 1,
+           next_attempt_at = CASE WHEN failure_attempts + 1 >= 3 THEN NULL ELSE ? END,
+           last_error = 'Memory provider reported ingestion failure', updated_at = ? WHERE custom_id = ?`,
+        )
+        .run(
+          new Date(Date.now() + 15 * 60_000).toISOString(),
+          new Date().toISOString(),
+          customId,
+        );
+      return;
+    }
     database.database
       .prepare(
         `UPDATE memory_documents SET provider_id = ?, status = ?, attempts = attempts + 1,
