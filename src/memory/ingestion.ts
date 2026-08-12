@@ -23,6 +23,7 @@ export function queuePendingMemory(
        conversation_id = excluded.conversation_id, content = excluded.content, complete = excluded.complete,
        status = 'pending',
        attempts = CASE WHEN memory_documents.content <> excluded.content THEN 0 ELSE memory_documents.attempts END,
+       failure_attempts = CASE WHEN memory_documents.content <> excluded.content THEN 0 ELSE memory_documents.failure_attempts END,
        next_attempt_at = CASE WHEN memory_documents.content <> excluded.content THEN NULL ELSE memory_documents.next_attempt_at END,
        last_error = CASE WHEN memory_documents.content <> excluded.content THEN NULL ELSE memory_documents.last_error END,
        updated_at = excluded.updated_at`,
@@ -51,7 +52,7 @@ export async function ingestPendingMemory(
       .prepare(
         `UPDATE memory_documents SET provider_id = ?, status = ?, attempts = attempts + 1,
          content = CASE WHEN ? = 'done' THEN '' ELSE content END,
-         last_error = NULL, updated_at = ? WHERE custom_id = ?`,
+         failure_attempts = 0, last_error = NULL, updated_at = ? WHERE custom_id = ?`,
       )
       .run(
         result.id,
@@ -86,7 +87,7 @@ export async function reconcilePendingMemory(
 ): Promise<number> {
   const rows = database.database
     .prepare(
-      `SELECT custom_id, provider_id, status, attempts, local_date, conversation_id, content, complete FROM memory_documents
+      `SELECT custom_id, provider_id, status, attempts, failure_attempts, local_date, conversation_id, content, complete FROM memory_documents
        WHERE status NOT IN ('done', 'failed') AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
        ORDER BY updated_at LIMIT 5`,
     )
@@ -95,6 +96,7 @@ export async function reconcilePendingMemory(
     provider_id: string | null;
     status: string;
     attempts: number;
+    failure_attempts: number;
     local_date: string;
     conversation_id: string;
     content: string;
@@ -110,7 +112,7 @@ export async function reconcilePendingMemory(
         if (status === "done") {
           database.database
             .prepare(
-              "UPDATE memory_documents SET status = 'done', content = '', next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE custom_id = ?",
+              "UPDATE memory_documents SET status = 'done', content = '', failure_attempts = 0, next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE custom_id = ?",
             )
             .run(new Date().toISOString(), row.custom_id);
           continue;
@@ -120,7 +122,7 @@ export async function reconcilePendingMemory(
           const exhausted = attempts >= 720;
           database.database
             .prepare(
-              `UPDATE memory_documents SET status = ?, attempts = ?, next_attempt_at = ?,
+              `UPDATE memory_documents SET status = ?, attempts = ?, failure_attempts = 0, next_attempt_at = ?,
                last_error = ?, updated_at = ? WHERE custom_id = ?`,
             )
             .run(
@@ -146,20 +148,20 @@ export async function reconcilePendingMemory(
           continue;
         }
       } catch (error) {
-        const attempts = row.attempts + 1;
-        const exhausted = attempts >= 3;
+        const failureAttempts = row.failure_attempts + 1;
+        const exhausted = failureAttempts >= 3;
         const message =
           error instanceof Error
             ? String(redactForLogging(error.message)).slice(0, 500)
             : "Memory status lookup failed";
         database.database
           .prepare(
-            `UPDATE memory_documents SET status = ?, attempts = ?, next_attempt_at = ?,
+            `UPDATE memory_documents SET status = ?, failure_attempts = ?, next_attempt_at = ?,
              last_error = ?, updated_at = ? WHERE custom_id = ?`,
           )
           .run(
             exhausted ? "failed" : row.status,
-            attempts,
+            failureAttempts,
             exhausted ? null : new Date(Date.now() + 15 * 60_000).toISOString(),
             message,
             new Date().toISOString(),

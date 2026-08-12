@@ -231,6 +231,7 @@ CREATE TABLE IF NOT EXISTS memory_documents (
   complete INTEGER CHECK (complete IN (0, 1)),
   status TEXT NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0,
+  failure_attempts INTEGER NOT NULL DEFAULT 0,
   next_attempt_at TEXT,
   last_error TEXT,
   updated_at TEXT NOT NULL
@@ -393,6 +394,12 @@ export class ApplicationDatabase {
         "heartbeat_occurrences",
         "next_retry_at",
         "TEXT",
+      );
+      addColumnIfMissing(
+        this.database,
+        "memory_documents",
+        "failure_attempts",
+        "INTEGER NOT NULL DEFAULT 0",
       );
       addColumnIfMissing(this.database, "automations", "deleted_at", "TEXT");
       addColumnIfMissing(

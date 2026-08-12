@@ -209,7 +209,7 @@ describe("durable memory ingestion", () => {
       await reconcilePendingMemory(database, memory);
     }
 
-    expect(memory.status).toHaveBeenCalledTimes(2);
+    expect(memory.status).toHaveBeenCalledTimes(3);
     const row = database.database
       .prepare(
         "SELECT status, attempts, next_attempt_at, last_error FROM memory_documents",
@@ -222,7 +222,7 @@ describe("durable memory ingestion", () => {
     };
     expect(row).toMatchObject({
       status: "failed",
-      attempts: 3,
+      attempts: 1,
       next_attempt_at: null,
     });
     expect(row.last_error).not.toContain("secret");
