@@ -175,6 +175,7 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
       async () => {
         await watchlist.check(3);
       },
+      () => whatsapp.status() === "open",
     );
     startedScheduler = scheduler;
     scheduler.start();

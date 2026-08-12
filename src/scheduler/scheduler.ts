@@ -23,6 +23,7 @@ export class Scheduler {
     private readonly logger: Logger,
     private readonly maintenance?: (now: Temporal.Instant) => Promise<void>,
     private readonly prepareHeartbeat?: () => Promise<void>,
+    private readonly canDeliver: () => boolean = () => true,
   ) {}
 
   start(): void {
@@ -267,6 +268,7 @@ export class Scheduler {
              attempts = 0, next_retry_at = NULL, updated_at = ? WHERE occurrence_id = ?`,
           )
           .run(message, new Date().toISOString(), occurrence.id);
+        if (!this.canDeliver()) return;
         await this.delivery.sendOwner(message, `heartbeat:${occurrence.id}`);
         this.database.database
           .prepare(
@@ -322,6 +324,7 @@ export class Scheduler {
   private async retryHeartbeatNotifications(
     now: Temporal.Instant,
   ): Promise<void> {
+    if (!this.canDeliver()) return;
     const pending = this.database.database
       .prepare(
         `SELECT occurrence_id, local_date, kind, message, attempts FROM heartbeat_occurrences
@@ -378,23 +381,27 @@ export class Scheduler {
 
   private async runAutomations(now: Temporal.Instant): Promise<void> {
     const currentDate = new Date(now.epochMilliseconds);
-    for (const pending of this.automations.pendingNotifications(currentDate)) {
-      try {
-        await this.delivery.sendOwner(
-          pending.output,
-          `automation:${pending.occurrenceId}`,
-        );
-        this.automations.finishRun(pending.occurrenceId, {
-          status: "completed",
-          output: pending.output,
-        });
-      } catch (error) {
-        this.automations.recordNotificationFailure(
-          pending.occurrenceId,
-          pending.output,
-          safeError(error),
-          currentDate,
-        );
+    if (this.canDeliver()) {
+      for (const pending of this.automations.pendingNotifications(
+        currentDate,
+      )) {
+        try {
+          await this.delivery.sendOwner(
+            pending.output,
+            `automation:${pending.occurrenceId}`,
+          );
+          this.automations.finishRun(pending.occurrenceId, {
+            status: "completed",
+            output: pending.output,
+          });
+        } catch (error) {
+          this.automations.recordNotificationFailure(
+            pending.occurrenceId,
+            pending.output,
+            safeError(error),
+            currentDate,
+          );
+        }
       }
     }
     const claimed = this.automations.claimDue(new Date(now.epochMilliseconds));
@@ -438,6 +445,13 @@ export class Scheduler {
         run.automation.deliveryMode === "owner_whatsapp" &&
         this.automations.get(run.automation.id)
       ) {
+        if (!this.canDeliver()) {
+          this.automations.finishRun(run.occurrenceId, {
+            status: "notification_pending",
+            output,
+          });
+          continue;
+        }
         try {
           await this.delivery.sendOwner(
             output,

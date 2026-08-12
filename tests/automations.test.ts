@@ -205,7 +205,7 @@ describe("declarative automations", () => {
     database.close();
   });
 
-  it("retries a completed automation reply without rerunning the agent", async () => {
+  it("defers a completed automation reply until delivery is ready", async () => {
     const root = await mkdtemp(join(tmpdir(), "stan-automation-"));
     const config = new ConfigStore(root);
     const initial = createDefaultConfig({ ownerPhone: "+923001234567" });
@@ -226,10 +226,8 @@ describe("declarative automations", () => {
     });
     const dispatch = vi.fn(async () => "submission-1");
     const read = vi.fn(async () => "the finished report");
-    const sendOwner = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("WhatsApp offline"))
-      .mockResolvedValueOnce({ messageId: "out-1" });
+    const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
+    let canDeliver = false;
     const scheduler = new Scheduler(
       database,
       config,
@@ -237,6 +235,9 @@ describe("declarative automations", () => {
       { sendOwner } as unknown as DeliveryService,
       automations,
       pino({ level: "silent" }),
+      undefined,
+      undefined,
+      () => canDeliver,
     );
 
     await scheduler.tick(Temporal.Instant.from("2026-08-13T04:00:00Z"));
@@ -248,7 +249,9 @@ describe("declarative automations", () => {
       status: "notification_pending",
       result: "the finished report",
     });
+    expect(sendOwner).not.toHaveBeenCalled();
 
+    canDeliver = true;
     await scheduler.tick(Temporal.Instant.from("2026-08-13T04:01:00Z"));
     expect(
       database.database
@@ -257,7 +260,7 @@ describe("declarative automations", () => {
     ).toEqual({ status: "completed", result: "the finished report" });
     expect(dispatch).toHaveBeenCalledOnce();
     expect(read).toHaveBeenCalledOnce();
-    expect(sendOwner).toHaveBeenCalledTimes(2);
+    expect(sendOwner).toHaveBeenCalledOnce();
     database.close();
   });
 

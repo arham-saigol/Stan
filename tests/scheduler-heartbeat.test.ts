@@ -117,6 +117,7 @@ describe("heartbeat execution", () => {
         return "One useful interruption";
       },
     );
+    let canDeliver = true;
     const scheduler = new Scheduler(
       database,
       config,
@@ -124,6 +125,9 @@ describe("heartbeat execution", () => {
       { sendOwner } as unknown as DeliveryService,
       new AutomationStore(database),
       pino({ level: "silent" }),
+      undefined,
+      undefined,
+      () => canDeliver,
     );
 
     await scheduler.tick(Temporal.Instant.from("2026-08-13T07:00:00Z"));
@@ -150,9 +154,21 @@ describe("heartbeat execution", () => {
         "2026-08-13T07:01:30Z",
         "2026-08-13T07:01:30Z",
       );
+    canDeliver = false;
     await scheduler.tick(Temporal.Instant.from("2026-08-13T07:02:00Z"));
 
     expect(deliver).toHaveBeenCalledOnce();
+    expect(sendOwner).toHaveBeenCalledTimes(2);
+    expect(
+      database.database
+        .prepare(
+          "SELECT status, attempts FROM heartbeat_occurrences WHERE occurrence_id = 'heartbeat:2026-08-13:crash'",
+        )
+        .get(),
+    ).toEqual({ status: "ready", attempts: 0 });
+
+    canDeliver = true;
+    await scheduler.tick(Temporal.Instant.from("2026-08-13T07:02:30Z"));
     expect(sendOwner).toHaveBeenCalledTimes(3);
     expect(
       database.database

@@ -12,6 +12,7 @@ import { initializeStateRoot, statePaths } from "../../state.ts";
 import { ApplicationDatabase } from "../../storage/application-db.ts";
 import { WorkspaceStore } from "../../workspace/store.ts";
 import { authenticateCodexAndSelect } from "./auth.ts";
+import { hasUnsettledDestructiveWrites } from "./apis-auth.ts";
 import { installAutostart } from "./service.ts";
 import { authenticateWhatsApp } from "./whatsapp-auth.ts";
 
@@ -67,6 +68,15 @@ export async function setupCommand(root: string): Promise<void> {
       apiValues.zernioApiKey ?? existingCredentials?.zernioApiKey;
     const candidateSupermemory =
       apiValues.supermemoryApiKey ?? existingCredentials?.supermemoryApiKey;
+    if (
+      apiValues.zernioApiKey &&
+      apiValues.zernioApiKey !== existingCredentials?.zernioApiKey &&
+      hasUnsettledDestructiveWrites(root)
+    ) {
+      throw new Error(
+        "Cannot rotate Zernio credentials while an X cancel or delete is still being verified",
+      );
+    }
     if (candidateXQuik) await new XQuikProvider(candidateXQuik).health();
     let selectedXAccountId = existingConfig?.selectedXAccountId;
     if (candidateZernio) {
