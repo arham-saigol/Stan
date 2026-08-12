@@ -173,6 +173,48 @@ describe("trusted tool boundaries", () => {
     database.close();
   });
 
+  it("preserves successful automation deletion across a replay", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const store = new AutomationStore(database);
+    const automation = store.create({
+      name: "delete replay",
+      schedule: { type: "once", at: "2099-08-13T04:00:00Z" },
+      instruction: "Prepare the report",
+      deliveryMode: "silent",
+      creatorMessageId: "owner-create",
+    });
+    const data = { id: automation.id };
+    database.claimInbound({
+      id: "owner-delete",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: `delete automation ${automation.id}`,
+      receivedAt: new Date().toISOString(),
+    });
+    database.createAutomationAuthorization(
+      "owner-delete",
+      "delete",
+      automationMutationPayload("delete", data),
+    );
+    const tool = automationTools(store, {
+      kind: "owner",
+      sourceMessageId: "owner-delete",
+    }).find((candidate) => candidate.name === "delete_automation")!;
+
+    await expect((tool.run as Run)({ data })).resolves.toMatchObject({
+      output: { deleted: true },
+    });
+    database.database
+      .prepare(
+        "UPDATE automation_authorizations SET result_json = NULL WHERE source_message_id = 'owner-delete'",
+      )
+      .run();
+    await expect((tool.run as Run)({ data })).resolves.toMatchObject({
+      output: { deleted: true },
+    });
+    database.close();
+  });
+
   it("does not consume memory intent when Supermemory is unavailable", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

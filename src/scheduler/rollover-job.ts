@@ -180,7 +180,9 @@ function sessionBounds(localDate: string): [string, string] {
     plainTime: Temporal.PlainTime.from("00:01"),
   });
   return [
-    start.toInstant().toString(),
-    start.add({ days: 1 }).toInstant().toString(),
+    new Date(start.toInstant().epochMilliseconds).toISOString(),
+    new Date(
+      start.add({ days: 1 }).toInstant().epochMilliseconds,
+    ).toISOString(),
   ];
 }

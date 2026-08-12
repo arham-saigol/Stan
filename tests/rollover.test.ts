@@ -280,6 +280,60 @@ describe("daily session rollover", () => {
     database.close();
   });
 
+  it("includes an automation exactly at the 00:01 session boundary", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const logger = pino({ level: "silent" });
+    const memory = {
+      ingestSession: async () => ({ id: "memory-1", status: "done" }),
+    } as unknown as SupermemoryProvider;
+    await repairDailyRollover(
+      database,
+      memory,
+      logger,
+      Temporal.Instant.from("2026-08-12T19:01:00Z"),
+    );
+    const automation = new AutomationStore(database).create({
+      name: "boundary report",
+      schedule: { type: "once", at: "2026-08-12T19:01:00.000Z" },
+      instruction: "Prepare the report",
+      deliveryMode: "silent",
+      creatorMessageId: "owner-1",
+      now: new Date("2026-08-12T18:00:00Z"),
+    });
+    database.database
+      .prepare(
+        `INSERT INTO automation_runs(occurrence_id, automation_id, scheduled_for, status, result, created_at, updated_at)
+         VALUES ('boundary-run', ?, '2026-08-12T19:01:00.000Z', 'completed', 'done', ?, ?)`,
+      )
+      .run(
+        automation.id,
+        "2026-08-12T19:01:00.000Z",
+        "2026-08-12T19:01:00.000Z",
+      );
+    database.database
+      .prepare(
+        "UPDATE automations SET enabled = 0, next_run_at = NULL WHERE id = ?",
+      )
+      .run(automation.id);
+
+    await repairDailyRollover(
+      database,
+      memory,
+      logger,
+      Temporal.Instant.from("2026-08-13T19:02:00Z"),
+    );
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT status FROM memory_documents WHERE custom_id = 'stan-session-2026-08-13'",
+        )
+        .get(),
+    ).toEqual({ status: "done" });
+    database.close();
+  });
+
   it("closes a session once an owner turn exhausts recovery", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

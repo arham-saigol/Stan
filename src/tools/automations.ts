@@ -91,7 +91,7 @@ export function automationTools(
       async run({ data }) {
         return {
           output: await mutate("delete", data, () => ({
-            deleted: store.delete(data.id),
+            deleted: store.delete(data.id) || !store.get(data.id),
           })),
         };
       },
