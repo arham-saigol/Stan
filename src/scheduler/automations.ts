@@ -156,9 +156,11 @@ export class AutomationStore {
       const timestamp = new Date().toISOString();
       this.application.database
         .prepare(
-          "DELETE FROM automation_runs WHERE automation_id = ? AND status <> 'completed'",
+          `UPDATE automation_runs SET status = 'failed', lease_until = NULL,
+           error = 'Automation deleted before completion', updated_at = ?
+           WHERE automation_id = ? AND status <> 'completed'`,
         )
-        .run(id);
+        .run(timestamp, id);
       return (
         this.application.database
           .prepare(

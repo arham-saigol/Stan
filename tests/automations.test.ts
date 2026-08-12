@@ -322,6 +322,65 @@ describe("declarative automations", () => {
     database.close();
   });
 
+  it("retains an active deleted run and suppresses its owner delivery", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-automation-delete-"));
+    const config = new ConfigStore(root);
+    const initial = createDefaultConfig({ ownerPhone: "+923001234567" });
+    await config.write({
+      ...initial,
+      heartbeat: { ...initial.heartbeat, enabled: false },
+    });
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const automations = new AutomationStore(database);
+    const automation = automations.create({
+      name: "delete while running",
+      schedule: { type: "once", at: "2026-08-13T04:00:00Z" },
+      instruction: "Prepare the report",
+      deliveryMode: "owner_whatsapp",
+      creatorMessageId: "owner-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    let releaseRead!: (value: string) => void;
+    const read = vi.fn(
+      () =>
+        new Promise<string>((resolvePromise) => {
+          releaseRead = resolvePromise;
+        }),
+    );
+    const sendOwner = vi.fn();
+    const scheduler = new Scheduler(
+      database,
+      config,
+      {
+        isBusy: () => false,
+        dispatch: vi.fn(async () => "submission-1"),
+        read,
+      } as unknown as StanAgentRuntime,
+      { sendOwner } as unknown as DeliveryService,
+      automations,
+      pino({ level: "silent" }),
+    );
+
+    const ticking = scheduler.tick(
+      Temporal.Instant.from("2026-08-13T04:00:00Z"),
+    );
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    expect(automations.delete(automation.id)).toBe(true);
+    releaseRead("finished report");
+    await ticking;
+
+    expect(sendOwner).not.toHaveBeenCalled();
+    expect(
+      database.database
+        .prepare(
+          "SELECT status, result FROM automation_runs WHERE automation_id = ?",
+        )
+        .get(automation.id),
+    ).toEqual({ status: "completed", result: "finished report" });
+    database.close();
+  });
+
   it("retains completed run history when an automation is deleted", () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

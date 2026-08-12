@@ -152,11 +152,18 @@ function hasUnsettledProactive(
     .get(localDate);
   if (heartbeat) return true;
   const [start, end] = sessionBounds(localDate);
+  const run = database.database
+    .prepare(
+      `SELECT 1 FROM automation_runs WHERE scheduled_for >= ? AND scheduled_for < ?
+       AND status IN ('leased', 'running', 'unknown', 'notification_pending') LIMIT 1`,
+    )
+    .get(start, end);
+  if (run) return true;
   return Boolean(
     database.database
       .prepare(
-        `SELECT 1 FROM automation_runs WHERE scheduled_for >= ? AND scheduled_for < ?
-         AND status IN ('leased', 'running', 'unknown', 'notification_pending') LIMIT 1`,
+        `SELECT 1 FROM automations WHERE enabled = 1 AND deleted_at IS NULL
+         AND next_run_at >= ? AND next_run_at < ? LIMIT 1`,
       )
       .get(start, end),
   );

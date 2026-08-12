@@ -434,7 +434,10 @@ export class Scheduler {
         continue;
       }
       const output = reply.slice(0, 12_000);
-      if (run.automation.deliveryMode === "owner_whatsapp") {
+      if (
+        run.automation.deliveryMode === "owner_whatsapp" &&
+        this.automations.get(run.automation.id)
+      ) {
         try {
           await this.delivery.sendOwner(
             output,

@@ -2,6 +2,7 @@ import pino from "pino";
 import { Temporal } from "@js-temporal/polyfill";
 import { describe, expect, it } from "vitest";
 import { ApplicationDatabase } from "../src/storage/application-db.ts";
+import { AutomationStore } from "../src/scheduler/automations.ts";
 import { pakistanRoutingDate } from "../src/scheduler/rollover.ts";
 import { repairDailyRollover } from "../src/scheduler/rollover-job.ts";
 
@@ -109,6 +110,42 @@ describe("daily session rollover", () => {
       status: "pending",
       content: "owner: one last thing\nstan: done",
     });
+    database.close();
+  });
+
+  it("waits for an overdue automation to be claimed before closing", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const logger = pino({ level: "silent" });
+    await repairDailyRollover(
+      database,
+      undefined,
+      logger,
+      Temporal.Instant.from("2026-08-13T17:00:00Z"),
+    );
+    new AutomationStore(database).create({
+      name: "late report",
+      schedule: { type: "once", at: "2026-08-13T18:00:00Z" },
+      instruction: "Prepare the report",
+      deliveryMode: "silent",
+      creatorMessageId: "owner-1",
+      now: new Date("2026-08-13T17:00:00Z"),
+    });
+
+    await repairDailyRollover(
+      database,
+      undefined,
+      logger,
+      Temporal.Instant.from("2026-08-13T19:02:00Z"),
+    );
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT state FROM daily_sessions WHERE local_date = '2026-08-13'",
+        )
+        .get(),
+    ).toEqual({ state: "active" });
     database.close();
   });
 
