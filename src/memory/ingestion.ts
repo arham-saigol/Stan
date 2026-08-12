@@ -140,7 +140,7 @@ export async function reconcilePendingMemory(
           const exhausted = attempts >= 720;
           database.database
             .prepare(
-              `UPDATE memory_documents SET status = ?, attempts = ?, failure_attempts = 0, next_attempt_at = ?,
+              `UPDATE memory_documents SET status = ?, attempts = ?, next_attempt_at = ?,
                last_error = ?, updated_at = ? WHERE custom_id = ?`,
             )
             .run(
