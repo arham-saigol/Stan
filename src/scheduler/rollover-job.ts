@@ -75,17 +75,19 @@ function localTranscript(
   const turns: { at: string; lines: string[] }[] = (
     database.database
       .prepare(
-        "SELECT received_at, body, response_text FROM inbound_messages WHERE session_id = ?",
+        "SELECT received_at, body, quoted_text, response_text FROM inbound_messages WHERE session_id = ?",
       )
       .all(conversationId) as {
       received_at: string;
       body: string;
+      quoted_text: string | null;
       response_text: string | null;
     }[]
   ).map((row) => ({
     at: row.received_at,
     lines: [
       `owner: ${row.body}`,
+      ...(row.quoted_text ? [`owner quoted: ${row.quoted_text}`] : []),
       ...(row.response_text ? [`stan: ${row.response_text}`] : []),
     ],
   }));

@@ -61,7 +61,8 @@ describe("daily session rollover", () => {
     database.claimInbound({
       id: "last-turn",
       senderIdentity: "923001234567@s.whatsapp.net",
-      body: "one last thing",
+      body: "publish this",
+      quotedText: "The exact post",
       receivedAt: "2026-08-13T19:00:30Z",
     });
     database.setInboundState("last-turn", "dispatched", {
@@ -108,7 +109,7 @@ describe("daily session rollover", () => {
         .get(),
     ).toEqual({
       status: "pending",
-      content: "owner: one last thing\nstan: done",
+      content: "owner: publish this\nowner quoted: The exact post\nstan: done",
     });
     database.close();
   });

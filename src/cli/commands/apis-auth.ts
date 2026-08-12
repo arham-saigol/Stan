@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { password, select } from "@inquirer/prompts";
 import { ConfigStore } from "../../config/store.ts";
 import {
@@ -7,6 +9,7 @@ import {
 import { SupermemoryProvider } from "../../memory/supermemory.ts";
 import { ZernioProvider } from "../../providers/zernio.ts";
 import { XQuikProvider } from "../../providers/xquik.ts";
+import { statePaths } from "../../state.ts";
 import { getDaemonStatus, startService, stopService } from "./service.ts";
 
 const prompts: [ApiCredentialName, string][] = [
@@ -19,6 +22,7 @@ const prompts: [ApiCredentialName, string][] = [
 export async function apisAuthCommand(root: string): Promise<void> {
   const daemonWasRunning = Boolean(await getDaemonStatus(root));
   const store = new CredentialStore(root);
+  const existingCredentials = store.tryRead();
   const configStore = new ConfigStore(root);
   console.log("Existing credentials:", store.masked());
   const updates: Partial<Record<ApiCredentialName, string | undefined>> = {};
@@ -28,6 +32,15 @@ export async function apisAuthCommand(root: string): Promise<void> {
       mask: "*",
     });
     if (value.trim()) updates[name] = value.trim();
+  }
+  if (
+    updates.zernioApiKey &&
+    updates.zernioApiKey !== existingCredentials?.zernioApiKey &&
+    hasUnsettledDestructiveWrites(root)
+  ) {
+    throw new Error(
+      "Cannot rotate Zernio credentials while an X cancel or delete is still being verified",
+    );
   }
   if (updates.xquikApiKey)
     await new XQuikProvider(updates.xquikApiKey).health();
@@ -71,5 +84,26 @@ export async function apisAuthCommand(root: string): Promise<void> {
     await stopService(root);
     await startService(root);
     console.log("Stan restarted with the updated provider credentials.");
+  }
+}
+
+export function hasUnsettledDestructiveWrites(root: string): boolean {
+  const path = statePaths(root).applicationDb;
+  if (!existsSync(path)) return false;
+  const database = new DatabaseSync(path, {
+    readOnly: true,
+  });
+  try {
+    return Boolean(
+      database
+        .prepare(
+          `SELECT 1 FROM scheduled_publications s
+           JOIN x_operations x ON x.logical_id = s.logical_operation_id
+           WHERE x.operation IN ('cancel', 'delete') LIMIT 1`,
+        )
+        .get(),
+    );
+  } finally {
+    database.close();
   }
 }
