@@ -393,6 +393,27 @@ describe("declarative automations", () => {
     database.close();
   });
 
+  it("does not revive a run paused while dispatch is pending", () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const automations = new AutomationStore(database);
+    const automation = automations.create({
+      name: "pause during dispatch",
+      schedule: { type: "once", at: "2026-08-13T04:00:00Z" },
+      instruction: "Prepare the report",
+      deliveryMode: "owner_whatsapp",
+      creatorMessageId: "owner-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const [run] = automations.claimDue(new Date("2026-08-13T04:00:00Z"));
+
+    automations.setEnabled(automation.id, false);
+    automations.setSubmission(run!.occurrenceId, "submission-1");
+
+    expect(automations.isRunActive(run!.occurrenceId)).toBe(false);
+    database.close();
+  });
+
   it("suppresses an in-flight automation reply after the job is paused", async () => {
     const root = await mkdtemp(join(tmpdir(), "stan-automation-pause-"));
     const config = new ConfigStore(root);

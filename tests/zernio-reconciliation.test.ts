@@ -262,7 +262,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
       new Date("2026-08-13T00:05:00Z"),
     );
     expect(database.getXOperation(operation.logicalId)!.nextRetryAt).toBe(
-      "2026-08-13T00:06:00.000Z",
+      "2026-08-13T00:05:00.000Z",
     );
 
     await reconcilePendingXOperations(
@@ -271,10 +271,55 @@ describe("ambiguous Zernio operation reconciliation", () => {
       delivery,
       new Date("2026-08-13T00:06:00Z"),
     );
+    await reconcilePendingXOperations(
+      database,
+      provider,
+      delivery,
+      new Date("2026-08-13T00:07:00Z"),
+    );
 
     expect(provider.mutate).toHaveBeenCalledTimes(3);
     expect(sendOwner).toHaveBeenCalledTimes(2);
     expect(database.getXOperation(operation.logicalId)!.nextRetryAt).toBeNull();
+    database.close();
+  });
+
+  it("keeps an exhausted provider retry due until its warning is queued", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-exhausted",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "post it",
+      receivedAt: "2026-08-13T00:00:00Z",
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-exhausted",
+      operation: "publish",
+      authorizedContent: "hello",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const operation = database.beginXOperation({
+      envelopeId: database.getAuthorizationForSource("owner-exhausted")!.id,
+      sourceMessageId: "owner-exhausted",
+      operation: "publish",
+      payloadHash: "hash",
+      accountId: "account-1",
+      requestJson: JSON.stringify({ operation: "publish", content: "hello" }),
+      content: "hello",
+    });
+    database.database
+      .prepare("UPDATE x_operations SET retry_count = 2 WHERE logical_id = ?")
+      .run(operation.logicalId);
+
+    const exhausted = database.scheduleXOperationRetry(
+      operation.logicalId,
+      "still unknown",
+      new Date("2026-08-13T00:03:00Z"),
+    );
+
+    expect(exhausted.retryCount).toBe(3);
+    expect(exhausted.nextRetryAt).toBe("2026-08-13T00:03:00.000Z");
     database.close();
   });
 

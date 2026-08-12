@@ -295,7 +295,8 @@ export class AutomationStore {
     this.application.database
       .prepare(
         `UPDATE automation_runs SET status = 'running', flue_submission_id = ?,
-         lease_until = ?, updated_at = ? WHERE occurrence_id = ?`,
+         lease_until = ?, updated_at = ? WHERE occurrence_id = ?
+         AND status IN ('unknown', 'leased', 'running')`,
       )
       .run(
         submissionId,

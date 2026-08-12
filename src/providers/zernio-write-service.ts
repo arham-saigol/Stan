@@ -221,8 +221,9 @@ export class ZernioWriteService {
       ) {
         trackProviderPoll(this.database, updated, new Date());
       } else if (
-        updated.status === "publishing" &&
-        isRetryableCreate(request.operation)
+        (updated.status === "publishing" || updated.status === "partial") &&
+        isRetryableCreate(request.operation) &&
+        !updated.providerId
       ) {
         return this.database.scheduleXOperationRetry(
           updated.logicalId,

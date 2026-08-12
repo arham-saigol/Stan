@@ -1078,7 +1078,7 @@ export class ApplicationDatabase {
     const nextRetryAt =
       retryCount < 3
         ? new Date(now.getTime() + 60_000 * 2 ** (retryCount - 1)).toISOString()
-        : null;
+        : now.toISOString();
     this.database
       .prepare(
         "UPDATE x_operations SET status = 'publishing', retry_count = ?, next_retry_at = ?, error = ?, updated_at = ? WHERE logical_id = ?",

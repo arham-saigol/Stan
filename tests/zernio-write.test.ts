@@ -561,6 +561,42 @@ describe("Zernio public-write boundary", () => {
     database.close();
   });
 
+  it("keeps an ID-less partial schedule retryable", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-schedule",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "schedule it",
+      receivedAt: new Date().toISOString(),
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-schedule",
+      operation: "schedule",
+      authorizedContent: "hello",
+      authorizedScheduledFor: "2099-08-14T00:00:00.000Z",
+    });
+    const service = new ZernioWriteService(database, {
+      mutate: vi.fn(async () => ({
+        status: "scheduled" as const,
+        scheduledFor: "2099-08-14T00:00:00Z",
+      })),
+    });
+
+    const result = await service.execute(
+      { sourceMessageId: "owner-schedule", selectedAccountId: "account-1" },
+      {
+        operation: "schedule",
+        content: "hello",
+        scheduledFor: "2099-08-14T00:00:00Z",
+      },
+    );
+
+    expect(result.status).toBe("publishing");
+    expect(result.nextRetryAt).not.toBeNull();
+    database.close();
+  });
+
   it("never reports published without a verified public id and URL", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
