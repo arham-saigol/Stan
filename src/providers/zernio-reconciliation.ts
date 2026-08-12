@@ -255,13 +255,25 @@ export async function reconcileScheduledPublications(
     ) {
       status = "publishing";
     }
-    const updated = database.updateXOperation(row.logical_operation_id, {
-      status,
-      providerId: row.provider_id,
-      ...(target?.platformPostId ? { publicId: target.platformPostId } : {}),
-      ...(target?.platformPostUrl ? { publicUrl: target.platformPostUrl } : {}),
-      ...(post.scheduledFor ? { scheduledFor: post.scheduledFor } : {}),
-      error,
+    const updated = database.transaction(() => {
+      if (status !== row.last_status) {
+        database.database
+          .prepare(
+            `UPDATE x_operations SET notification_message = NULL, notification_attempts = 0,
+             next_retry_at = NULL WHERE logical_id = ?`,
+          )
+          .run(row.logical_operation_id);
+      }
+      return database.updateXOperation(row.logical_operation_id, {
+        status,
+        providerId: row.provider_id,
+        ...(target?.platformPostId ? { publicId: target.platformPostId } : {}),
+        ...(target?.platformPostUrl
+          ? { publicUrl: target.platformPostUrl }
+          : {}),
+        ...(post.scheduledFor ? { scheduledFor: post.scheduledFor } : {}),
+        error,
+      });
     });
     if (isTerminal(row.operation, status)) {
       const message = renderStatus(

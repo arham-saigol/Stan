@@ -934,6 +934,12 @@ describe("ambiguous Zernio operation reconciliation", () => {
         "UPDATE scheduled_publications SET next_poll_at = ? WHERE logical_operation_id = ?",
       )
       .run("2026-08-13T00:02:00.000Z", operation.logicalId);
+    database.database
+      .prepare(
+        `UPDATE x_operations SET notification_message = 'The X request is verified as scheduled',
+         next_retry_at = '2026-08-13T00:02:00.000Z' WHERE logical_id = ?`,
+      )
+      .run(operation.logicalId);
     await reconcileScheduledPublications(
       database,
       provider,
@@ -944,6 +950,7 @@ describe("ambiguous Zernio operation reconciliation", () => {
     const resolved = database.getXOperation(operation.logicalId)!;
     expect(resolved.status).toBe("partial");
     expect(resolved.error).toMatch(/owner-authorized instant/i);
+    expect(resolved.notificationMessage).toBeNull();
     expect(provider.mutate).toHaveBeenLastCalledWith(
       expect.objectContaining({
         request: { operation: "cancel", providerPostId: "z-1" },
