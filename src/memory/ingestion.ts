@@ -49,9 +49,17 @@ export async function ingestPendingMemory(
     const result = await memory.ingestSession(input);
     database.database
       .prepare(
-        "UPDATE memory_documents SET provider_id = ?, status = ?, attempts = attempts + 1, last_error = NULL, updated_at = ? WHERE custom_id = ?",
+        `UPDATE memory_documents SET provider_id = ?, status = ?, attempts = attempts + 1,
+         content = CASE WHEN ? = 'done' THEN '' ELSE content END,
+         last_error = NULL, updated_at = ? WHERE custom_id = ?`,
       )
-      .run(result.id, result.status, new Date().toISOString(), customId);
+      .run(
+        result.id,
+        result.status,
+        result.status,
+        new Date().toISOString(),
+        customId,
+      );
   } catch (error) {
     const message =
       error instanceof Error
@@ -102,7 +110,7 @@ export async function reconcilePendingMemory(
         if (status === "done") {
           database.database
             .prepare(
-              "UPDATE memory_documents SET status = 'done', next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE custom_id = ?",
+              "UPDATE memory_documents SET status = 'done', content = '', next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE custom_id = ?",
             )
             .run(new Date().toISOString(), row.custom_id);
           continue;

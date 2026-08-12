@@ -115,6 +115,23 @@ describe("durable memory ingestion", () => {
     database.close();
   });
 
+  it("clears completed transcript content while retaining provider metadata", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const memory = {
+      ingestSession: vi.fn(async () => ({ id: "memory-1", status: "done" })),
+    } as unknown as SupermemoryProvider;
+
+    await ingestPendingMemory(database, memory, input);
+
+    expect(
+      database.database
+        .prepare("SELECT provider_id, status, content FROM memory_documents")
+        .get(),
+    ).toEqual({ provider_id: "memory-1", status: "done", content: "" });
+    database.close();
+  });
+
   it("clears stale provider state when a transcript is refreshed", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
