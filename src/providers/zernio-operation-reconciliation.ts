@@ -77,8 +77,35 @@ export async function reconcilePendingXOperations(
       }
       continue;
     }
+    const scheduleDrift =
+      request.operation === "schedule" &&
+      result.scheduledFor !== undefined &&
+      !sameInstant(result.scheduledFor, request.scheduledFor);
+    let driftCancelled = false;
+    if (scheduleDrift && result.providerId) {
+      try {
+        const cancellation = await provider.mutate({
+          requestId: `schedule-drift:${operation.logicalId}`,
+          accountId: operation.accountId,
+          request: {
+            operation: "cancel",
+            providerPostId: result.providerId,
+          },
+        });
+        driftCancelled = cancellation.status === "cancelled";
+      } catch {
+        // Persist and poll until cancellation can be verified.
+      }
+    }
     let updated = database.transaction(() => {
-      const applied = applyResult(database, operation, request, result);
+      let applied = applyResult(database, operation, request, result);
+      if (scheduleDrift && driftCancelled) {
+        applied = database.updateXOperation(applied.logicalId, {
+          status: "partial",
+          error:
+            "Zernio returned a schedule outside the exact owner-authorized instant; the unauthorized schedule was cancelled",
+        });
+      }
       if (applied.status !== "publishing") {
         database.database
           .prepare(

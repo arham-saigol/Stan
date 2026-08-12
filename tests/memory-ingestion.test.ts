@@ -189,6 +189,43 @@ describe("durable memory ingestion", () => {
     database.close();
   });
 
+  it("does not count successful status polls against resubmission failures", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const memory = {
+      ingestSession: vi
+        .fn()
+        .mockResolvedValueOnce({ id: "memory-1", status: "pending" })
+        .mockRejectedValueOnce(new Error("provider temporarily unavailable")),
+      status: vi
+        .fn()
+        .mockResolvedValueOnce({ status: "pending" })
+        .mockResolvedValueOnce({ status: "pending" })
+        .mockResolvedValueOnce({ status: "failed" }),
+    } as unknown as SupermemoryProvider;
+
+    await ingestPendingMemory(database, memory, input);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      database.database.exec(
+        "UPDATE memory_documents SET next_attempt_at = '2000-01-01T00:00:00Z' WHERE status != 'failed'",
+      );
+      await reconcilePendingMemory(database, memory);
+    }
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT status, attempts, failure_attempts, next_attempt_at FROM memory_documents",
+        )
+        .get(),
+    ).toMatchObject({
+      status: "pending",
+      attempts: 4,
+      failure_attempts: 2,
+    });
+    database.close();
+  });
+
   it("bounds permanent provider status lookup failures", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

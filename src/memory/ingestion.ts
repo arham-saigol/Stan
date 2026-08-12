@@ -70,8 +70,9 @@ export async function ingestPendingMemory(
         : "Memory provider failed";
     database.database
       .prepare(
-        `UPDATE memory_documents SET status = CASE WHEN attempts + 1 >= 3 THEN 'failed' ELSE 'pending' END,
-         attempts = attempts + 1, next_attempt_at = CASE WHEN attempts + 1 >= 3 THEN NULL ELSE ? END,
+        `UPDATE memory_documents SET status = CASE WHEN failure_attempts + 1 >= 3 THEN 'failed' ELSE 'pending' END,
+         attempts = attempts + 1, failure_attempts = failure_attempts + 1,
+         next_attempt_at = CASE WHEN failure_attempts + 1 >= 3 THEN NULL ELSE ? END,
          last_error = ?, updated_at = ? WHERE custom_id = ?`,
       )
       .run(

@@ -113,15 +113,25 @@ describe("ambiguous Zernio operation reconciliation", () => {
     });
     let attempt = 0;
     const provider: ZernioMutationProvider = {
-      mutate: vi.fn(async () => {
-        attempt += 1;
-        if (attempt === 1) throw new Error("connection reset");
-        return {
-          status: "scheduled" as const,
-          providerId: "z-1",
-          scheduledFor: "2026-08-14T01:00:00Z",
-        };
-      }),
+      mutate: vi.fn(
+        async ({
+          request,
+        }: {
+          requestId: string;
+          accountId: string;
+          request: ZernioMutationRequest;
+        }) => {
+          attempt += 1;
+          if (attempt === 1) throw new Error("connection reset");
+          if (request.operation === "cancel")
+            return { status: "cancelled" as const };
+          return {
+            status: "scheduled" as const,
+            providerId: "z-1",
+            scheduledFor: "2026-08-14T01:00:00Z",
+          };
+        },
+      ),
     };
     const initial = await new ZernioWriteService(database, provider).execute(
       {
@@ -146,7 +156,12 @@ describe("ambiguous Zernio operation reconciliation", () => {
 
     const resolved = database.getXOperation(initial.logicalId)!;
     expect(resolved.status).toBe("partial");
-    expect(resolved.error).toMatch(/owner-authorized instant/i);
+    expect(resolved.error).toMatch(/unauthorized schedule was cancelled/i);
+    expect(provider.mutate).toHaveBeenLastCalledWith({
+      requestId: `schedule-drift:${initial.logicalId}`,
+      accountId: "account-1",
+      request: { operation: "cancel", providerPostId: "z-1" },
+    });
     expect(sendOwner).not.toHaveBeenCalled();
     database.close();
   });
