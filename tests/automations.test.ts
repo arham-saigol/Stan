@@ -377,6 +377,46 @@ describe("declarative automations", () => {
     database.close();
   });
 
+  it("resets execution attempts before deferred notification retries", () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const automations = new AutomationStore(database);
+    const automation = automations.create({
+      name: "recovered report",
+      schedule: { type: "once", at: "2026-08-13T04:00:00Z" },
+      instruction: "Prepare the report",
+      deliveryMode: "owner_whatsapp",
+      creatorMessageId: "owner-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const [run] = automations.claimDue(new Date("2026-08-13T04:00:00Z"));
+    database.database
+      .prepare(
+        "UPDATE automation_runs SET attempts = 2 WHERE occurrence_id = ?",
+      )
+      .run(run!.occurrenceId);
+
+    automations.finishRun(run!.occurrenceId, {
+      status: "notification_pending",
+      output: "finished report",
+    });
+    automations.recordNotificationFailure(
+      run!.occurrenceId,
+      "finished report",
+      "WhatsApp unavailable",
+      new Date("2026-08-13T04:01:00Z"),
+    );
+
+    expect(
+      database.database
+        .prepare(
+          "SELECT status, attempts FROM automation_runs WHERE automation_id = ?",
+        )
+        .get(automation.id),
+    ).toEqual({ status: "notification_pending", attempts: 1 });
+    database.close();
+  });
+
   it("bounds persistent automation notification failures", async () => {
     const root = await mkdtemp(
       join(tmpdir(), "stan-automation-notify-failure-"),

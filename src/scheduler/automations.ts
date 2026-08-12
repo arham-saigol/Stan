@@ -375,12 +375,15 @@ export class AutomationStore {
   ): void {
     this.application.database
       .prepare(
-        "UPDATE automation_runs SET status = ?, result = ?, error = ?, lease_until = NULL, updated_at = ? WHERE occurrence_id = ?",
+        `UPDATE automation_runs SET status = ?, result = ?, error = ?, lease_until = NULL,
+         attempts = CASE WHEN ? = 'notification_pending' THEN 0 ELSE attempts END,
+         updated_at = ? WHERE occurrence_id = ?`,
       )
       .run(
         result.status,
         result.output ?? null,
         result.error ?? null,
+        result.status,
         new Date().toISOString(),
         occurrenceId,
       );

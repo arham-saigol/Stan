@@ -187,19 +187,19 @@ export async function reconcileScheduledPublications(
         // Keep monitoring until cancellation can be verified.
       }
     }
-    let cancelRetried = false;
+    let destructiveRetried = false;
     if (
-      row.operation === "cancel" &&
+      (row.operation === "cancel" || row.operation === "delete") &&
       observed === "scheduled" &&
       provider.mutate
     ) {
       try {
         const cancellation = await provider.mutate({
-          requestId: `cancel-retry:${row.logical_operation_id}`,
+          requestId: `${row.operation}-retry:${row.logical_operation_id}`,
           accountId: row.account_id,
           request: { operation: "cancel", providerPostId: row.provider_id },
         });
-        cancelRetried = cancellation.status === "cancelled";
+        destructiveRetried = cancellation.status === "cancelled";
       } catch {
         // Keep monitoring and retrying while the schedule remains active.
       }
@@ -228,12 +228,15 @@ export async function reconcileScheduledPublications(
     } else if (unexpectedPublication) {
       status = "partial";
       error = `Zernio reported the ${row.operation} target as published`;
-    } else if (cancelRetried) {
+    } else if (destructiveRetried) {
       status = "cancelled";
       error = null;
-    } else if (row.operation === "cancel" && observed === "scheduled") {
+    } else if (
+      (row.operation === "cancel" || row.operation === "delete") &&
+      observed === "scheduled"
+    ) {
       status = "publishing";
-      error = "Cancellation is not yet verified; the schedule remains active";
+      error = `${row.operation === "delete" ? "Deletion" : "Cancellation"} is not yet verified; the schedule remains active`;
     } else if (scheduleMismatch && driftCancelled) {
       status = "partial";
       error =

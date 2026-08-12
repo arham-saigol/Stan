@@ -1143,6 +1143,66 @@ describe("ambiguous Zernio operation reconciliation", () => {
     database.close();
   });
 
+  it("retries an ambiguous delete while its schedule remains active", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-delete-schedule",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "delete X post z-1",
+      receivedAt: "2026-08-13T00:00:00Z",
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-delete-schedule",
+      operation: "delete",
+      targetPostId: "z-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    let mutationAttempt = 0;
+    const provider = {
+      verifyPostAccount: vi.fn(async () => true),
+      mutate: vi.fn(async () => {
+        mutationAttempt += 1;
+        if (mutationAttempt === 1) throw new Error("ambiguous delete outcome");
+        return { status: "cancelled" as const };
+      }),
+      getPost: vi.fn(async () => ({
+        status: "scheduled" as const,
+        scheduledFor: "2026-08-14T00:00:00Z",
+        platforms: [
+          { platform: "twitter" as const, status: "scheduled" as const },
+        ],
+      })),
+    };
+    const operation = await new ZernioWriteService(database, provider).execute(
+      {
+        sourceMessageId: "owner-delete-schedule",
+        selectedAccountId: "account-1",
+      },
+      { operation: "delete", providerPostId: "z-1" },
+    );
+    setOperationCreatedAt(database, operation.logicalId);
+    const sendOwner = vi.fn(async () => ({ messageId: "out-1" }));
+
+    await reconcileScheduledPublications(
+      database,
+      provider,
+      { sendOwner } as unknown as DeliveryService,
+      new Date("2026-08-13T00:02:00Z"),
+    );
+
+    expect(database.getXOperation(operation.logicalId)!.status).toBe(
+      "cancelled",
+    );
+    expect(provider.mutate).toHaveBeenLastCalledWith({
+      requestId: `delete-retry:${operation.logicalId}`,
+      accountId: "account-1",
+      request: { operation: "cancel", providerPostId: "z-1" },
+    });
+    expect(sendOwner).toHaveBeenCalledOnce();
+    database.close();
+  });
+
   it("keeps an unchanged delete unresolved until bounded polling exhausts", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();
