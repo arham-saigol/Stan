@@ -37,6 +37,16 @@ describe("declarative automations", () => {
         now: new Date("2026-08-13T00:00:00Z"),
       }),
     ).toThrow(/30 minutes/i);
+    expect(() =>
+      store.create({
+        name: "irregular",
+        schedule: { type: "cron", expression: "0,30,31 * * * *" },
+        instruction: "Research one topic",
+        deliveryMode: "silent",
+        creatorMessageId: "owner-1",
+        now: new Date("2026-08-13T00:31:00Z"),
+      }),
+    ).toThrow(/30 minutes/i);
     database.close();
   });
 

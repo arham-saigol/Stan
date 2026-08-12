@@ -440,20 +440,40 @@ function nextRunFor(schedule: AutomationSchedule, now: Date): Date | null {
     const value = new Date(normalizeInstant(schedule.at));
     return value.getTime() >= now.getTime() ? value : null;
   }
+  validateCronMinutes(schedule.expression);
   let cron: Cron;
   try {
     cron = new Cron(schedule.expression, { timezone: TIMEZONE, paused: true });
   } catch (error) {
     throw new Error("Invalid cron expression", { cause: error });
   }
-  const next = cron.nextRuns(2, now);
+  return cron.nextRun(now);
+}
+
+function validateCronMinutes(expression: string): void {
+  const fields = expression.trim().split(/\s+/);
+  if (fields.length !== 5)
+    throw new Error("Cron automations must use a five-field expression");
+  const minuteField = fields[0]!;
+  const minutes =
+    minuteField === "*/30" || minuteField === "0-59/30"
+      ? [0, 30]
+      : minuteField.split(",").map((value) =>
+          /^\d{1,2}$/.test(value) ? Number(value) : Number.NaN,
+        );
+  const unique = [...new Set(minutes)].sort((left, right) => left - right);
   if (
-    next.length < 2 ||
-    next[1]!.getTime() - next[0]!.getTime() < 30 * 60_000
+    unique.length < 1 ||
+    unique.length > 2 ||
+    unique.some(
+      (minute) => !Number.isInteger(minute) || minute < 0 || minute > 59,
+    ) ||
+    (unique.length === 2 &&
+      (unique[1]! - unique[0]! < 30 ||
+        60 - unique[1]! + unique[0]! < 30))
   ) {
     throw new Error("Cron automations must run at least 30 minutes apart");
   }
-  return next[0] ?? null;
 }
 
 function normalizeInstant(value: string): string {
