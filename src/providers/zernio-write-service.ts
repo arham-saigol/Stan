@@ -272,6 +272,17 @@ export class ZernioWriteService {
       }
       return updated;
     } catch (error) {
+      if (
+        recovered &&
+        (request.operation === "cancel" || request.operation === "delete") &&
+        isNotFound(error)
+      ) {
+        return this.database.updateXOperation(operation.logicalId, {
+          status: "cancelled",
+          ...(resolvedTargetPostId ? { providerId: resolvedTargetPostId } : {}),
+          error: null,
+        });
+      }
       const status = isDefinitiveProviderFailure(error)
         ? "failed"
         : "publishing";
@@ -381,6 +392,21 @@ function stableJson(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+function isNotFound(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  if ("status" in error && error.status === 404) return true;
+  if ("statusCode" in error && error.statusCode === 404) return true;
+  return (
+    "response" in error &&
+    Boolean(
+      error.response &&
+      typeof error.response === "object" &&
+      "status" in error.response &&
+      error.response.status === 404,
+    )
+  );
 }
 
 function isDefinitiveProviderFailure(error: unknown): boolean {

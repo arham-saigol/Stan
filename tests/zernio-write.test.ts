@@ -382,7 +382,9 @@ describe("Zernio public-write boundary", () => {
     const mutate = vi
       .fn()
       .mockRejectedValueOnce(new Error("daemon exited before provider call"))
-      .mockResolvedValueOnce({ status: "cancelled" as const });
+      .mockRejectedValueOnce(
+        Object.assign(new Error("post not found"), { statusCode: 404 }),
+      );
     const service = new ZernioWriteService(database, {
       mutate,
       resolveProviderPostId,
@@ -402,7 +404,11 @@ describe("Zernio public-write boundary", () => {
       .run("Provider call has not completed", interrupted.logicalId);
     const replayed = await service.execute(context, request);
 
-    expect(replayed).toMatchObject({ status: "cancelled", providerId: "z-1" });
+    expect(replayed).toMatchObject({
+      status: "cancelled",
+      providerId: "z-1",
+      error: null,
+    });
     expect(resolveProviderPostId).toHaveBeenCalledOnce();
     expect(mutate).toHaveBeenCalledTimes(2);
     expect(mutate).toHaveBeenLastCalledWith(
