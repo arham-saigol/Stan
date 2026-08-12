@@ -31,6 +31,18 @@ describe("Pakistan-time heartbeat cadence", () => {
     expect(schedule.at(-1)?.localDate).toBe("2026-08-14");
   });
 
+  it("keeps both endpoints unique for an all-day schedule", () => {
+    const schedule = heartbeatScheduleForDate("2026-08-13", {
+      ...config.heartbeat,
+      startTime: "09:00",
+      endTime: "09:00",
+      intervalMinutes: 1440,
+    });
+
+    expect(schedule).toHaveLength(2);
+    expect(new Set(schedule.map((occurrence) => occurrence.id)).size).toBe(2);
+  });
+
   it("runs no heartbeat from 02:00 until 09:00", () => {
     expect(
       dueHeartbeat("2026-08-13T21:30:00Z", config.heartbeat),

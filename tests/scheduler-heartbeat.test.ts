@@ -91,7 +91,7 @@ describe("heartbeat execution", () => {
     expect(sendOwner).toHaveBeenCalledTimes(1);
     expect(sendOwner).toHaveBeenCalledWith(
       "Morning — what should we work on?",
-      "heartbeat:heartbeat:2026-08-13:09:00",
+      "heartbeat:heartbeat:2026-08-13:2026-08-13:09:00",
     );
     expect(deliver).toHaveBeenCalledTimes(2);
     database.close();
@@ -129,7 +129,7 @@ describe("heartbeat execution", () => {
     expect(
       database.database
         .prepare(
-          "SELECT local_date FROM heartbeat_occurrences WHERE occurrence_id = 'heartbeat:2026-08-13:00:30'",
+          "SELECT local_date FROM heartbeat_occurrences WHERE occurrence_id = 'heartbeat:2026-08-13:2026-08-14:00:30'",
         )
         .get(),
     ).toEqual({ local_date: "2026-08-14" });

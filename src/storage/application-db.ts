@@ -119,7 +119,8 @@ CREATE TABLE IF NOT EXISTS heartbeat_settings_authorizations (
   source_message_id TEXT PRIMARY KEY REFERENCES inbound_messages(provider_message_id),
   payload_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  consumed_at TEXT
+  consumed_at TEXT,
+  result_json TEXT
 ) STRICT;
 CREATE TABLE IF NOT EXISTS daily_sessions (
   local_date TEXT PRIMARY KEY,
@@ -360,6 +361,12 @@ export class ApplicationDatabase {
         this.database,
         "workspace_authorizations",
         "result_content",
+        "TEXT",
+      );
+      addColumnIfMissing(
+        this.database,
+        "heartbeat_settings_authorizations",
+        "result_json",
         "TEXT",
       );
       addColumnIfMissing(
@@ -887,28 +894,56 @@ export class ApplicationDatabase {
       .run(sourceMessageId, payloadJson, now.toISOString());
   }
 
-  consumeHeartbeatSettingsAuthorization(
+  beginHeartbeatSettingsUpdate(
     sourceMessageId: string,
     payloadJson: string,
-  ): void {
+  ): string | undefined {
     const now = new Date();
+    return this.transaction(() => {
+      const existing = this.database
+        .prepare(
+          `SELECT consumed_at, result_json FROM heartbeat_settings_authorizations
+           WHERE source_message_id = ? AND payload_json = ?`,
+        )
+        .get(sourceMessageId, payloadJson) as
+        | { consumed_at: string | null; result_json: string | null }
+        | undefined;
+      if (existing?.result_json) return existing.result_json;
+      if (existing?.consumed_at) return undefined;
+      const result = this.database
+        .prepare(
+          `UPDATE heartbeat_settings_authorizations SET consumed_at = ?
+           WHERE source_message_id = ? AND payload_json = ?
+             AND consumed_at IS NULL AND created_at > ?`,
+        )
+        .run(
+          now.toISOString(),
+          sourceMessageId,
+          payloadJson,
+          new Date(now.getTime() - 15 * 60_000).toISOString(),
+        );
+      if (result.changes !== 1)
+        throw new Error(
+          "Current owner authorization is required to update heartbeat settings",
+        );
+      return undefined;
+    });
+  }
+
+  finishHeartbeatSettingsUpdate(
+    sourceMessageId: string,
+    payloadJson: string,
+    resultJson: string,
+  ): void {
     const result = this.database
       .prepare(
-        `UPDATE heartbeat_settings_authorizations SET consumed_at = ?
-         WHERE source_message_id = ? AND payload_json = ?
-           AND consumed_at IS NULL AND created_at > ?`,
+        `UPDATE heartbeat_settings_authorizations SET result_json = ?
+         WHERE source_message_id = ? AND payload_json = ? AND consumed_at IS NOT NULL
+           AND (result_json IS NULL OR result_json = ?)`,
       )
-      .run(
-        now.toISOString(),
-        sourceMessageId,
-        payloadJson,
-        new Date(now.getTime() - 15 * 60_000).toISOString(),
-      );
-    if (result.changes !== 1) {
-      throw new Error(
-        "Current owner authorization is required to update heartbeat settings",
-      );
-    }
+      .run(resultJson, sourceMessageId, payloadJson, resultJson);
+    if (result.changes !== 1)
+      throw new Error("Heartbeat settings outcome could not be recorded");
   }
 
   rejectFormerOwnerInbound(sourceMessageId: string, now = new Date()): void {

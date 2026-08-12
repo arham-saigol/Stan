@@ -41,7 +41,7 @@ export function heartbeatScheduleForDate(
     const localTime = `${pad(at.hour)}:${pad(at.minute)}`;
     const kind = occurrences.length === 0 ? "morning" : "regular";
     occurrences.push({
-      id: `heartbeat:${anchorDate}:${localTime}`,
+      id: `heartbeat:${anchorDate}:${at.toPlainDate().toString()}:${localTime}`,
       anchorDate,
       localDate: at.toPlainDate().toString(),
       localTime,

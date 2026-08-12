@@ -44,14 +44,25 @@ export function settingsTools(
         ),
       }),
       async run({ data }) {
-        database.consumeHeartbeatSettingsAuthorization(
-          requireOwner(),
-          heartbeatSettingsMutationPayload(data),
+        const sourceMessageId = requireOwner();
+        const payload = heartbeatSettingsMutationPayload(data);
+        const previous = database.beginHeartbeatSettingsUpdate(
+          sourceMessageId,
+          payload,
         );
+        if (previous) {
+          const output = JSON.parse(previous) as unknown;
+          return { output };
+        }
         const updated = await store.update((current) => ({
           ...current,
           heartbeat: { ...current.heartbeat, ...data },
         }));
+        database.finishHeartbeatSettingsUpdate(
+          sourceMessageId,
+          payload,
+          JSON.stringify(updated.heartbeat),
+        );
         return { output: updated.heartbeat };
       },
     }),

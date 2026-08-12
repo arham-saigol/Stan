@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceStore } from "../src/workspace/store.ts";
 import { ApplicationDatabase } from "../src/storage/application-db.ts";
+import type { ConfigStore } from "../src/config/store.ts";
 import { heartbeatTools } from "../src/tools/heartbeat.ts";
+import { settingsTools } from "../src/tools/settings.ts";
 import { workspaceTools } from "../src/tools/workspace.ts";
 import { automationTools } from "../src/tools/automations.ts";
 import { memoryTools } from "../src/tools/memory.ts";
@@ -98,6 +100,37 @@ describe("trusted tool boundaries", () => {
       output: { file: "goals", content: "updated" },
     });
     expect(edit).toHaveBeenCalledOnce();
+    database.close();
+  });
+
+  it("returns the prior heartbeat settings result on an exact retry", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-settings",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "update heartbeat",
+      receivedAt: new Date().toISOString(),
+    });
+    const data = { enabled: false };
+    database.createHeartbeatSettingsAuthorization(
+      "owner-settings",
+      JSON.stringify(data),
+    );
+    const update = vi.fn(async () => ({ heartbeat: data }));
+    const store = { read: vi.fn(), update } as unknown as ConfigStore;
+    const tool = settingsTools(store, database, {
+      kind: "owner",
+      sourceMessageId: "owner-settings",
+    }).find((candidate) => candidate.name === "update_heartbeat_settings")!;
+
+    await expect((tool.run as Run)({ data })).resolves.toMatchObject({
+      output: data,
+    });
+    await expect((tool.run as Run)({ data })).resolves.toMatchObject({
+      output: data,
+    });
+    expect(update).toHaveBeenCalledOnce();
     database.close();
   });
 
