@@ -52,10 +52,12 @@ export async function ingestPendingMemory(
       .prepare(
         `UPDATE memory_documents SET provider_id = ?, status = ?, attempts = attempts + 1,
          content = CASE WHEN ? = 'done' THEN '' ELSE content END,
-         failure_attempts = 0, last_error = NULL, updated_at = ? WHERE custom_id = ?`,
+         failure_attempts = CASE WHEN ? = 'done' THEN 0 ELSE failure_attempts END,
+         last_error = NULL, updated_at = ? WHERE custom_id = ?`,
       )
       .run(
         result.id,
+        result.status,
         result.status,
         result.status,
         new Date().toISOString(),
@@ -139,7 +141,7 @@ export async function reconcilePendingMemory(
             );
           continue;
         }
-        if (row.attempts >= 3) {
+        if (row.failure_attempts >= 2) {
           database.database
             .prepare(
               "UPDATE memory_documents SET status = 'failed', next_attempt_at = NULL, updated_at = ? WHERE custom_id = ?",
@@ -147,6 +149,19 @@ export async function reconcilePendingMemory(
             .run(new Date().toISOString(), row.custom_id);
           continue;
         }
+        database.database
+          .prepare(
+            `UPDATE memory_documents SET provider_id = NULL, status = 'pending',
+             failure_attempts = failure_attempts + 1, next_attempt_at = ?,
+             last_error = 'Memory provider reported ingestion failure', updated_at = ?
+             WHERE custom_id = ?`,
+          )
+          .run(
+            new Date(Date.now() + 15 * 60_000).toISOString(),
+            new Date().toISOString(),
+            row.custom_id,
+          );
+        continue;
       } catch (error) {
         const failureAttempts = row.failure_attempts + 1;
         const exhausted = failureAttempts >= 3;

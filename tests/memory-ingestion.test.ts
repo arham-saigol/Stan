@@ -171,7 +171,7 @@ describe("durable memory ingestion", () => {
     } as unknown as SupermemoryProvider;
 
     await ingestPendingMemory(database, memory, input);
-    for (let attempt = 0; attempt < 4; attempt += 1) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
       database.database.exec(
         "UPDATE memory_documents SET next_attempt_at = '2000-01-01T00:00:00Z' WHERE status != 'failed'",
       );

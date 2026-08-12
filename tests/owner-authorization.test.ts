@@ -127,6 +127,11 @@ describe("owner X authorization classification", () => {
         '{"name":"research","scheduleType":"once","at":"2099-08-13T04:00:00Z","instruction":"Research the topic","deliveryMode":"owner_whatsapp"}',
     });
     expect(
+      deriveAutomationAuthorization(
+        'create automation: {"name":"disabled","scheduleType":"once","at":"2099-08-13T04:00:00Z","instruction":"Research","deliveryMode":"silent","enabled":false}',
+      ),
+    ).toBeUndefined();
+    expect(
       deriveAutomationAuthorization("Delete automation automation-1"),
     ).toEqual({
       operation: "delete",

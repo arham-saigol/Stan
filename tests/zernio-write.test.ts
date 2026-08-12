@@ -282,6 +282,43 @@ describe("Zernio public-write boundary", () => {
     database.close();
   });
 
+  it("persists a resolved destructive target before the provider call", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-delete-persisted",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "delete X post 1900123456789",
+      receivedAt: new Date().toISOString(),
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-delete-persisted",
+      operation: "delete",
+      targetPostId: "1900123456789",
+    });
+    const service = new ZernioWriteService(database, {
+      resolveProviderPostId: vi.fn(async () => "z-1"),
+      mutate: vi.fn(async () => {
+        const row = database.database
+          .prepare("SELECT provider_id FROM x_operations")
+          .get();
+        expect(row).toEqual({ provider_id: "z-1" });
+        throw new Error("daemon exited after provider call");
+      }),
+    });
+
+    const result = await service.execute(
+      {
+        sourceMessageId: "owner-delete-persisted",
+        selectedAccountId: "account-1",
+      },
+      { operation: "delete", providerPostId: "1900123456789" },
+    );
+
+    expect(result.providerId).toBe("z-1");
+    database.close();
+  });
+
   it("preserves the resolved provider ID after an ambiguous deletion", async () => {
     const root = await mkdtemp(join(tmpdir(), "stan-zernio-rotation-"));
     const database = new ApplicationDatabase(join(root, "stan.db"));
@@ -362,7 +399,11 @@ describe("Zernio public-write boundary", () => {
     const first = await service.execute(context, request);
     const replayed = await service.execute(context, request);
 
-    expect(replayed).toEqual(first);
+    expect(replayed).toMatchObject({
+      logicalId: first.logicalId,
+      status: first.status,
+      providerId: first.providerId,
+    });
     expect(first.status).toBe("cancelled");
     expect(resolveProviderPostId).toHaveBeenCalledOnce();
     expect(mutate).toHaveBeenCalledOnce();

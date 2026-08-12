@@ -183,6 +183,15 @@ export function automationMutationPayload(
 ): string {
   if (operation === "create") {
     const scheduleType = input.scheduleType;
+    const allowed = new Set([
+      "name",
+      "scheduleType",
+      scheduleType === "once" ? "at" : "expression",
+      "instruction",
+      "deliveryMode",
+    ]);
+    if (Object.keys(input).some((key) => !allowed.has(key)))
+      throw new Error("Automation confirmation contains unsupported fields");
     if (
       typeof input.name !== "string" ||
       (scheduleType !== "once" && scheduleType !== "cron") ||

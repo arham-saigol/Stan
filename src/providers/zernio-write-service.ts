@@ -162,8 +162,20 @@ export class ZernioWriteService {
         "A scheduled X post must be at least one minute in the future",
       );
     }
-    const operation = begin();
+    let operation = begin();
     if (isTerminal(operation.status)) return operation;
+    if (
+      !isRetryableCreate(request.operation) &&
+      resolvedTargetPostId &&
+      !operation.providerId
+    ) {
+      operation = this.database.updateXOperation(operation.logicalId, {
+        status: "publishing",
+        providerId: resolvedTargetPostId,
+        error: "Provider call has not completed",
+      });
+      trackProviderPoll(this.database, operation, new Date());
+    }
 
     try {
       const providerRequest =
