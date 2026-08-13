@@ -1,5 +1,5 @@
 import type { Post } from "@zernio/node";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { DeliveryService } from "../src/gateway/delivery.ts";
 import { reconcilePendingXOperations } from "../src/providers/zernio-operation-reconciliation.ts";
 import { reconcileScheduledPublications } from "../src/providers/zernio-reconciliation.ts";
@@ -30,6 +30,15 @@ function setOperationCreatedAt(
 }
 
 describe("ambiguous Zernio operation reconciliation", () => {
+  beforeAll(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-13T00:01:00Z"));
+  });
+
+  afterAll(() => {
+    vi.useRealTimers();
+  });
+
   it("persists the request and retries it with the same provider request id", async () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

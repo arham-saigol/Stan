@@ -143,6 +143,42 @@ describe("declarative automations", () => {
     database.close();
   });
 
+  it("settles a queued notification when its automation is paused", () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    const store = new AutomationStore(database);
+    const automation = store.create({
+      name: "paused notification",
+      schedule: { type: "once", at: "2026-08-13T04:00:00Z" },
+      instruction: "Check once",
+      deliveryMode: "owner_whatsapp",
+      creatorMessageId: "owner-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const [run] = store.claimDue(new Date("2026-08-13T04:00:00Z"));
+    store.finishRun(run!.occurrenceId, {
+      status: "notification_pending",
+      output: "queued result",
+    });
+
+    store.setEnabled(automation.id, false);
+
+    expect(
+      store.pendingNotifications(new Date("2026-08-13T04:01:00Z")),
+    ).toEqual([]);
+    expect(
+      database.database
+        .prepare(
+          "SELECT status, error FROM automation_runs WHERE occurrence_id = ?",
+        )
+        .get(run!.occurrenceId),
+    ).toEqual({
+      status: "failed",
+      error: "Automation disabled before recovery",
+    });
+    database.close();
+  });
+
   it("settles a running recurring occurrence when its automation is paused", () => {
     const database = new ApplicationDatabase(":memory:");
     database.migrate();

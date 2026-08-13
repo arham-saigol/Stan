@@ -167,7 +167,7 @@ export class AutomationStore {
           .prepare(
             `UPDATE automation_runs SET status = 'failed', lease_until = NULL,
              error = 'Automation disabled before recovery', updated_at = ?
-             WHERE automation_id = ? AND status IN ('unknown', 'leased', 'running')`,
+             WHERE automation_id = ? AND status IN ('unknown', 'leased', 'running', 'notification_pending')`,
           )
           .run(timestamp, id);
       }
