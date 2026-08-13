@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { password, select } from "@inquirer/prompts";
 import { ConfigStore } from "../../config/store.ts";
@@ -9,7 +10,7 @@ import {
 import { SupermemoryProvider } from "../../memory/supermemory.ts";
 import { ZernioProvider } from "../../providers/zernio.ts";
 import { XQuikProvider } from "../../providers/xquik.ts";
-import { statePaths } from "../../state.ts";
+import { atomicWritePrivate, statePaths } from "../../state.ts";
 import { getDaemonStatus, startService, stopService } from "./service.ts";
 
 const prompts: [ApiCredentialName, string][] = [
@@ -67,6 +68,7 @@ export async function apisAuthCommand(root: string): Promise<void> {
   const shouldRestart = daemonWasRunning || daemonIsRunning;
   let configChanged = false;
   let credentialsSaved = false;
+  let completed = false;
   try {
     if (credentialsChanged && shouldRestart) await stopService(root);
     if (
@@ -92,9 +94,21 @@ export async function apisAuthCommand(root: string): Promise<void> {
       await startService(root);
       console.log("Stan restarted with the updated provider credentials.");
     }
+    completed = true;
   } catch (error) {
-    if (configChanged && !credentialsSaved)
-      await configStore.write(existingConfig);
+    if (!completed) {
+      if (configChanged) await configStore.write(existingConfig);
+      if (credentialsSaved) {
+        if (existingCredentials) {
+          await atomicWritePrivate(
+            store.path,
+            `${JSON.stringify(existingCredentials, null, 2)}\n`,
+          );
+        } else {
+          await rm(store.path, { force: true });
+        }
+      }
+    }
     if (credentialsChanged && shouldRestart)
       await startService(root).catch(() => undefined);
     throw error;
