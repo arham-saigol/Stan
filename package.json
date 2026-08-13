@@ -1,0 +1,66 @@
+{
+  "name": "stan-x-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Private WhatsApp agent for growing one X account",
+  "bin": {
+    "stan": "dist/cli/index.js"
+  },
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "scripts": {
+    "build": "vite build && tsup && node scripts/copy-assets.mjs",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build",
+    "dev": "vite dev",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "start": "node dist/gateway/daemon.js",
+    "test": "vitest --config vitest.config.ts run",
+    "test:watch": "vitest --config vitest.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.84.1",
+    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@flue/runtime": "2.0.3",
+    "@hono/node-server": "2.1.0",
+    "@inquirer/prompts": "8.3.0",
+    "@js-temporal/polyfill": "0.5.1",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "@zernio/node": "0.2.540",
+    "commander": "15.0.0",
+    "croner": "10.0.1",
+    "firecrawl": "4.32.0",
+    "hono": "4.13.1",
+    "ipaddr.js": "2.5.0",
+    "libphonenumber-js": "1.12.40",
+    "pino": "10.3.1",
+    "proper-lockfile": "4.1.2",
+    "qrcode-terminal": "0.12.0",
+    "rotating-file-stream": "3.2.9",
+    "supermemory": "4.25.4",
+    "valibot": "1.4.2",
+    "x-twitter-scraper": "0.8.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@flue/vite": "2.0.3",
+    "@types/node": "24.10.13",
+    "@types/proper-lockfile": "4.1.4",
+    "@types/qrcode-terminal": "0.12.2",
+    "eslint": "10.0.3",
+    "eslint-config-prettier": "10.1.8",
+    "prettier": "3.8.2",
+    "tsup": "8.5.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.56.1",
+    "vite": "8.2.1",
+    "vitest": "4.1.10"
+  },
+  "overrides": {
+    "esbuild": "0.28.2"
+  }
+}

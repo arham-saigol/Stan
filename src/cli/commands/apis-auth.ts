@@ -1,0 +1,136 @@
+import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
+import { password, select } from "@inquirer/prompts";
+import { ConfigStore } from "../../config/store.ts";
+import {
+  CredentialStore,
+  type ApiCredentialName,
+} from "../../config/credentials.ts";
+import { SupermemoryProvider } from "../../memory/supermemory.ts";
+import { ZernioProvider } from "../../providers/zernio.ts";
+import { XQuikProvider } from "../../providers/xquik.ts";
+import { atomicWritePrivate, statePaths } from "../../state.ts";
+import { getDaemonStatus, startService, stopService } from "./service.ts";
+
+const prompts: [ApiCredentialName, string][] = [
+  ["xquikApiKey", "XQuik API key"],
+  ["zernioApiKey", "Zernio API key"],
+  ["firecrawlApiKey", "Firecrawl API key"],
+  ["supermemoryApiKey", "Supermemory API key"],
+];
+
+export async function apisAuthCommand(root: string): Promise<void> {
+  const daemonWasRunning = Boolean(await getDaemonStatus(root));
+  const store = new CredentialStore(root);
+  const existingCredentials = store.tryRead();
+  const configStore = new ConfigStore(root);
+  const existingConfig = configStore.read();
+  console.log("Existing credentials:", store.masked());
+  const updates: Partial<Record<ApiCredentialName, string | undefined>> = {};
+  for (const [name, message] of prompts) {
+    const value = await password({
+      message: `${message} (blank keeps existing)`,
+      mask: "*",
+    });
+    if (value.trim()) updates[name] = value.trim();
+  }
+  if (updates.xquikApiKey)
+    await new XQuikProvider(updates.xquikApiKey).health();
+  let selectedXAccountId: string | undefined;
+  if (updates.zernioApiKey) {
+    const accounts = await new ZernioProvider(
+      updates.zernioApiKey,
+    ).listAccounts();
+    const choices = accounts
+      .filter((account) => account.id && account.connected)
+      .map((account) => ({
+        value: account.id!,
+        name: account.username ?? account.id!,
+      }));
+    if (!choices.length) throw new Error("Zernio has no connected X account");
+    const current = existingConfig.selectedXAccountId;
+    selectedXAccountId = choices.some((choice) => choice.value === current)
+      ? current
+      : await select({ message: "Bound X account", choices });
+  }
+  if (updates.supermemoryApiKey) {
+    const config = configStore.read();
+    await new SupermemoryProvider(
+      updates.supermemoryApiKey,
+      config.memoryContainerTag,
+    ).profile();
+  }
+  const credentialsChanged = Object.keys(updates).length > 0;
+  const daemonIsRunning = credentialsChanged
+    ? Boolean(await getDaemonStatus(root))
+    : false;
+  const shouldRestart = daemonWasRunning || daemonIsRunning;
+  let configChanged = false;
+  let credentialsSaved = false;
+  let completed = false;
+  try {
+    if (credentialsChanged && shouldRestart) await stopService(root);
+    if (
+      updates.zernioApiKey &&
+      updates.zernioApiKey !== existingCredentials?.zernioApiKey &&
+      hasTrackedZernioWrites(root)
+    ) {
+      throw new Error(
+        "Cannot rotate Zernio credentials while an X operation is still being tracked",
+      );
+    }
+    if (selectedXAccountId) {
+      await configStore.update((config) => ({
+        ...config,
+        selectedXAccountId,
+      }));
+      configChanged = true;
+    }
+    await store.update(updates);
+    credentialsSaved = true;
+    console.log("API credentials validated where possible and saved.");
+    if (credentialsChanged && shouldRestart) {
+      await startService(root);
+      console.log("Stan restarted with the updated provider credentials.");
+    }
+    completed = true;
+  } catch (error) {
+    if (!completed) {
+      if (configChanged) await configStore.write(existingConfig);
+      if (credentialsSaved) {
+        if (existingCredentials) {
+          await atomicWritePrivate(
+            store.path,
+            `${JSON.stringify(existingCredentials, null, 2)}\n`,
+          );
+        } else {
+          await rm(store.path, { force: true });
+        }
+      }
+    }
+    if (credentialsChanged && shouldRestart)
+      await startService(root).catch(() => undefined);
+    throw error;
+  }
+}
+
+export function hasTrackedZernioWrites(root: string): boolean {
+  const path = statePaths(root).applicationDb;
+  if (!existsSync(path)) return false;
+  const database = new DatabaseSync(path, {
+    readOnly: true,
+  });
+  try {
+    return Boolean(
+      database
+        .prepare(
+          `SELECT 1 FROM scheduled_publications
+           UNION ALL SELECT 1 FROM x_operations WHERE next_retry_at IS NOT NULL LIMIT 1`,
+        )
+        .get(),
+    );
+  } finally {
+    database.close();
+  }
+}
