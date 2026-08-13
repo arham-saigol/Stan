@@ -236,7 +236,7 @@ export async function reconcileScheduledPublications(
       status = "cancelled";
       error = null;
     } else if (
-      !exhausted &&
+      (!exhausted || observed === "scheduled") &&
       (row.operation === "cancel" || row.operation === "delete") &&
       (observed === "scheduled" ||
         (row.operation === "delete" && observed === "published"))
