@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises";
 import { confirm, input, password, select } from "@inquirer/prompts";
 import { ConfigStore, createDefaultConfig } from "../../config/store.ts";
 import {
@@ -8,7 +9,11 @@ import { normalizeOwnerPhone } from "../../config/schema.ts";
 import { ZernioProvider } from "../../providers/zernio.ts";
 import { XQuikProvider } from "../../providers/xquik.ts";
 import { SupermemoryProvider } from "../../memory/supermemory.ts";
-import { initializeStateRoot, statePaths } from "../../state.ts";
+import {
+  atomicWritePrivate,
+  initializeStateRoot,
+  statePaths,
+} from "../../state.ts";
 import { ApplicationDatabase } from "../../storage/application-db.ts";
 import { WorkspaceStore } from "../../workspace/store.ts";
 import { authenticateCodexAndSelect, snapshotCodexState } from "./auth.ts";
@@ -35,9 +40,14 @@ export async function setupCommand(root: string): Promise<void> {
   const daemonWasRunning = Boolean(await getDaemonStatus(root));
   let daemonStopped = false;
   let existingConfig: ReturnType<ConfigStore["read"]> | undefined;
+  let existingCredentials: ReturnType<CredentialStore["tryRead"]>;
   let configWritten = false;
-  let credentialsSaved = false;
+  let credentialsWritten = false;
+  let setupComplete = false;
   let codexChanged = false;
+  const ownerIdentities = database.database
+    .prepare("SELECT identity, kind, created_at FROM owner_identities")
+    .all() as { identity: string; kind: string; created_at: string }[];
   const restoreCodex = await snapshotCodexState(root);
   try {
     console.log(
@@ -58,7 +68,7 @@ export async function setupCommand(root: string): Promise<void> {
     });
     const ownerPhone = normalizeOwnerPhone(localPhone);
     const credentialStore = new CredentialStore(root);
-    const existingCredentials = credentialStore.tryRead();
+    existingCredentials = credentialStore.tryRead();
     const apiValues: Partial<Record<ApiCredentialName, string | undefined>> =
       {};
     for (const [name, label] of [
@@ -143,7 +153,7 @@ export async function setupCommand(root: string): Promise<void> {
     });
     configWritten = true;
     await credentialStore.update(apiValues);
-    credentialsSaved = true;
+    credentialsWritten = true;
     database.configureOwnerIdentity(`${ownerPhone.slice(1)}@s.whatsapp.net`);
     if (
       await confirm({ message: "Authenticate WhatsApp now?", default: true })
@@ -158,6 +168,7 @@ export async function setupCommand(root: string): Promise<void> {
     ) {
       await installAutostart(root);
     }
+    setupComplete = true;
     console.log({
       stateRoot: root,
       ownerPhone: `${ownerPhone.slice(0, 5)}…${ownerPhone.slice(-3)}`,
@@ -167,9 +178,31 @@ export async function setupCommand(root: string): Promise<void> {
       heartbeat: finalConfig.heartbeat,
     });
   } catch (error) {
-    if (configWritten && !credentialsSaved && existingConfig)
-      await new ConfigStore(root).write(existingConfig);
-    if (codexChanged && !credentialsSaved) await restoreCodex();
+    if (!setupComplete) {
+      if (configWritten) {
+        if (existingConfig) await new ConfigStore(root).write(existingConfig);
+        else await rm(paths.config, { force: true });
+      }
+      if (credentialsWritten) {
+        if (existingCredentials) {
+          await atomicWritePrivate(
+            paths.credentials,
+            `${JSON.stringify(existingCredentials, null, 2)}\n`,
+          );
+        } else {
+          await rm(paths.credentials, { force: true });
+        }
+      }
+      database.transaction(() => {
+        database.database.exec("DELETE FROM owner_identities");
+        const insert = database.database.prepare(
+          "INSERT INTO owner_identities(identity, kind, created_at) VALUES (?, ?, ?)",
+        );
+        for (const owner of ownerIdentities)
+          insert.run(owner.identity, owner.kind, owner.created_at);
+      });
+      if (codexChanged) await restoreCodex();
+    }
     throw error;
   } finally {
     database.close();

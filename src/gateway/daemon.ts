@@ -189,15 +189,36 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
       stopping = true;
       shutdownPromise = (async () => {
         logger.info("Graceful shutdown started");
-        whatsapp.quiesce();
-        await scheduler.stop();
-        await whatsapp.drain();
-        await agent.stop();
-        await whatsapp.stop();
-        database.close();
-        await new Promise<void>((resolve) => server.close(() => resolve()));
-        await releaseLock();
-        await logger.close();
+        const errors: unknown[] = [];
+        const cleanup = async (operation: () => void | Promise<void>) => {
+          try {
+            await operation();
+          } catch (error) {
+            errors.push(error);
+          }
+        };
+        await cleanup(() => whatsapp.quiesce());
+        await cleanup(() => scheduler.stop());
+        await cleanup(() => whatsapp.drain());
+        await cleanup(() => agent.stop());
+        await cleanup(() => whatsapp.stop());
+        await cleanup(() => database.close());
+        await cleanup(
+          () => new Promise<void>((resolve) => server.close(() => resolve())),
+        );
+        await cleanup(releaseLock);
+        if (errors.length)
+          logger.error(
+            {
+              errors: errors.map((error) =>
+                redactForLogging(
+                  error instanceof Error ? error.message : "Cleanup failed",
+                ),
+              ),
+            },
+            "Shutdown completed with cleanup errors",
+          );
+        await cleanup(() => logger.close());
       })();
       return shutdownPromise;
     };
