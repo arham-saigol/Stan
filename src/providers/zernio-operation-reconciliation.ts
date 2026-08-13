@@ -254,8 +254,9 @@ function applyResult(
 ): XOperation {
   const scheduleDrift =
     request.operation === "schedule" &&
-    result.scheduledFor !== undefined &&
-    !sameInstant(result.scheduledFor, request.scheduledFor);
+    result.providerId !== undefined &&
+    (result.scheduledFor === undefined ||
+      !sameInstant(result.scheduledFor, request.scheduledFor));
   return database.updateXOperation(operation.logicalId, {
     status: scheduleDrift
       ? "partial"
