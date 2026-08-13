@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApplicationDatabase } from "../src/storage/application-db.ts";
 import {
   OwnerIngress,
+  reconcilePendingReplies,
   type InboundMessage,
   type OwnerDispatch,
 } from "../src/gateway/owner-ingress.ts";
@@ -255,6 +256,34 @@ describe("owner-only ingress", () => {
     expect(
       database.getAuthorization(authorization.id)?.consumedAt,
     ).not.toBeNull();
+  });
+
+  it("rejects a queued reply from a former configured owner", async () => {
+    const { database } = await harness();
+    database.claimInbound({
+      id: "former-owner-reply",
+      senderIdentity: ownerJid,
+      body: "private request",
+      receivedAt: new Date().toISOString(),
+    });
+    database.setInboundState("former-owner-reply", "reply_pending", {
+      responseText: "private response",
+    });
+    database.configureOwnerIdentity("923111234567@s.whatsapp.net");
+    const sendOwner = vi.fn();
+
+    expect(
+      await reconcilePendingReplies(database, { sendOwner } as never),
+    ).toBe(1);
+
+    expect(sendOwner).not.toHaveBeenCalled();
+    expect(
+      database.database
+        .prepare(
+          "SELECT state, recovery_attempts, next_retry_at FROM inbound_messages WHERE provider_message_id = 'former-owner-reply'",
+        )
+        .get(),
+    ).toEqual({ state: "unknown", recovery_attempts: 3, next_retry_at: null });
   });
 
   it("does not reconcile an owner message that this process is still handling", async () => {

@@ -320,7 +320,7 @@ export async function reconcilePendingReplies(
 ): Promise<number> {
   const rows = database.database
     .prepare(
-      `SELECT provider_message_id, response_text FROM inbound_messages
+      `SELECT provider_message_id, sender_identity, response_text FROM inbound_messages
        WHERE state IN ('reply_pending', 'failed', 'unknown')
          AND response_text IS NOT NULL AND outbound_message_id IS NULL
          AND recovery_attempts < 3 AND (next_retry_at IS NULL OR next_retry_at <= ?)
@@ -328,9 +328,22 @@ export async function reconcilePendingReplies(
     )
     .all(now.toISOString()) as {
     provider_message_id: string;
+    sender_identity: string;
     response_text: string;
   }[];
   for (const row of rows) {
+    if (!database.isOwnerIdentity(row.sender_identity)) {
+      database.database
+        .prepare(
+          `UPDATE inbound_messages SET state = 'unknown', recovery_attempts = 3,
+           next_retry_at = NULL, error = ? WHERE provider_message_id = ?`,
+        )
+        .run(
+          "Sender is no longer an authorized owner identity",
+          row.provider_message_id,
+        );
+      continue;
+    }
     try {
       const outbound = await delivery.sendOwner(
         row.response_text,
