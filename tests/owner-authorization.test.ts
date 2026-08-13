@@ -55,13 +55,14 @@ describe("owner X authorization classification", () => {
         "https://x.com/arham/status/1900123456789",
       ),
     ).toEqual({ operation: "delete", targetPostId: "1900123456789" });
-    expect(deriveAuthorization("Delete this X post")).toBeUndefined();
+    expect(deriveAuthorization("Delete this X post")).toEqual({
+      operation: "delete",
+    });
     expect(
       deriveAuthorization("Reply to X post 1900123456789", "Exact reply"),
     ).toEqual({
       operation: "reply",
       targetPostId: "1900123456789",
-      authorizedContent: "Exact reply",
     });
     expect(
       deriveAuthorization(
@@ -69,10 +70,46 @@ describe("owner X authorization classification", () => {
         "See https://x.com/other/status/999 and reply here",
       ),
     ).toMatchObject({ targetPostId: "1900123456789" });
-    expect(deriveAuthorization("Reply to this thread")).toBeUndefined();
+    expect(deriveAuthorization("Reply to this thread")).toEqual({
+      operation: "reply",
+    });
   });
 
-  it("requires exact content and an explicit ISO instant for schedules", () => {
+  it("authorizes natural references without verbatim IDs or instants", () => {
+    expect(deriveAuthorization("Reply to the second one")).toEqual({
+      operation: "reply",
+    });
+    expect(
+      deriveAuthorization("Post the second one", "1. Draft A\n2. Draft B"),
+    ).toEqual({ operation: "publish" });
+    expect(deriveAuthorization("Post #2", "1. Draft A\n2. Draft B")).toEqual({
+      operation: "publish",
+    });
+    expect(deriveAuthorization("Edit the second one")).toEqual({
+      operation: "edit",
+    });
+    expect(deriveAuthorization("Cancel the scheduled one")).toEqual({
+      operation: "cancel",
+    });
+    expect(deriveAuthorization("Delete #3")).toEqual({ operation: "delete" });
+    expect(
+      deriveAuthorization(
+        "Schedule that for tomorrow at nine",
+        "Exact post text",
+      ),
+    ).toEqual({
+      operation: "schedule",
+      authorizedContent: "Exact post text",
+    });
+    expect(
+      deriveAuthorization(
+        "Schedule the second one for tomorrow at nine",
+        "1. Draft A\n2. Draft B",
+      ),
+    ).toEqual({ operation: "schedule" });
+  });
+
+  it("binds exact content and instants when the owner provides them", () => {
     expect(
       deriveAuthorization(
         "Schedule this X post for 2026-08-14T09:00:00+05:00",
@@ -89,14 +126,18 @@ describe("owner X authorization classification", () => {
       operation: "publish",
       authorizedContent: "Exact post text",
     });
-    expect(deriveAuthorization("Post this on X")).toBeUndefined();
+    expect(deriveAuthorization("Post this on X")).toEqual({
+      operation: "publish",
+    });
     expect(
       deriveAuthorization("Save this as an X draft", "Exact draft"),
     ).toEqual({
       operation: "draft",
       authorizedContent: "Exact draft",
     });
-    expect(deriveAuthorization("Save this as an X draft")).toBeUndefined();
+    expect(deriveAuthorization("Save this as an X draft")).toEqual({
+      operation: "draft",
+    });
     expect(
       deriveAuthorization(
         "Schedule this X post for 2026-02-30T09:00:00Z",
@@ -111,9 +152,9 @@ describe("owner X authorization classification", () => {
       operation: "publish",
       authorizedContent: content,
     });
-    expect(
-      deriveAuthorization("Post this on X", "x".repeat(25_001)),
-    ).toBeUndefined();
+    expect(deriveAuthorization("Post this on X", "x".repeat(25_001))).toEqual({
+      operation: "publish",
+    });
   });
 
   it("requires an explicit automation mutation verb and object", () => {

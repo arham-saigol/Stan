@@ -61,13 +61,15 @@ export class Scheduler {
         );
       }
     }
-    this.database.database
-      .prepare(
-        `UPDATE heartbeat_occurrences SET status = 'failed', lease_until = NULL, next_retry_at = ?,
-         reason = 'Lease expired before completion could be verified', updated_at = ?
-         WHERE status IN ('leased', 'running') AND lease_until < ?`,
-      )
-      .run(now.toString(), now.toString(), now.toString());
+    if (!this.agent.isBusy()) {
+      this.database.database
+        .prepare(
+          `UPDATE heartbeat_occurrences SET status = 'failed', lease_until = NULL, next_retry_at = ?,
+           reason = 'Lease expired before completion could be verified', updated_at = ?
+           WHERE status IN ('leased', 'running') AND lease_until < ?`,
+        )
+        .run(now.toString(), now.toString(), now.toString());
+    }
     const config = this.config.read();
     await this.runHeartbeat(config, now);
     await this.runAutomations(now);
@@ -123,7 +125,6 @@ export class Scheduler {
           id: failedOccurrence.occurrence_id,
           anchorDate: failedOccurrence.local_date,
           localDate: failedOccurrence.local_date,
-          localTime: failedOccurrence.occurrence_id.split(":").at(-1)!,
           scheduledFor: failedOccurrence.scheduled_for,
           kind: failedOccurrence.kind,
           submissionId: failedOccurrence.flue_submission_id,

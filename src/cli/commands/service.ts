@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -46,10 +47,15 @@ export async function startService(root: string): Promise<DaemonStatus> {
     env: { ...process.env, STAN_STATE_ROOT: root },
   });
   child.unref();
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  // The daemon binds its control endpoint only after the agent starts, which
+  // refreshes Codex credentials on cold networks; allow up to two minutes.
+  // Fail fast only when the child exited without holding the daemon lock.
+  const lockFile = join(root, "daemon.lock");
+  for (let attempt = 0; attempt < 480; attempt += 1) {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
     const status = await getDaemonStatus(root);
     if (status) return status;
+    if (child.exitCode !== null && !existsSync(lockFile)) break;
   }
   throw new Error(`Stan did not start. Inspect ${statePaths(root).logs}`);
 }

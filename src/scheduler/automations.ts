@@ -214,7 +214,11 @@ export class AutomationStore {
     for (const row of due) {
       const automation = mapAutomation(row);
       if (!automation.nextRunAt) continue;
-      const scheduledFor = automation.nextRunAt;
+      // A run missed while the daemon was offline must not re-open the old
+      // day's session: clamp its timestamp to the current tick.
+      const scheduledFor = new Date(
+        Math.max(new Date(automation.nextRunAt).getTime(), now.getTime()),
+      ).toISOString();
       const occurrenceId = `automation:${automation.id}:${scheduledFor}`;
       const accepted = this.application.transaction(() => {
         const timestamp = now.toISOString();

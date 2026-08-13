@@ -1401,7 +1401,77 @@ describe("ambiguous Zernio operation reconciliation", () => {
         )
         .get(operation.logicalId),
     ).toEqual({ poll_count: 3 });
-    expect(sendOwner).not.toHaveBeenCalled();
+    expect(sendOwner).toHaveBeenCalledOnce();
+    expect(String(sendOwner.mock.calls[0]![0])).toContain("not yet verified");
+
+    await reconcileScheduledPublications(
+      database,
+      provider,
+      { sendOwner } as unknown as DeliveryService,
+      new Date("2026-08-13T00:17:00Z"),
+    );
+    expect(sendOwner).toHaveBeenCalledOnce();
+    database.close();
+  });
+
+  it("notifies the owner once when a cancellation never verifies", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-cancel",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "cancel X post z-1",
+      receivedAt: "2026-08-13T00:00:00Z",
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-cancel",
+      operation: "cancel",
+      targetPostId: "z-1",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const provider = {
+      verifyPostAccount: vi.fn(async () => true),
+      mutate: vi.fn(async () => {
+        throw new Error("ambiguous cancel outcome");
+      }),
+      getPost: vi.fn(async () => ({
+        status: "scheduled" as const,
+        scheduledFor: "2026-08-14T00:00:00Z",
+        platforms: [
+          { platform: "twitter" as const, status: "scheduled" as const },
+        ],
+      })),
+    };
+    const operation = await new ZernioWriteService(database, provider).execute(
+      { sourceMessageId: "owner-cancel", selectedAccountId: "account-1" },
+      { operation: "cancel", providerPostId: "z-1" },
+    );
+    setOperationCreatedAt(database, operation.logicalId);
+    const notifications: string[] = [];
+    const sendOwner = vi.fn(async (message: string) => {
+      notifications.push(message);
+      return { messageId: "out-1" };
+    });
+
+    for (const time of [
+      "2026-08-13T00:02:00Z",
+      "2026-08-13T00:07:00Z",
+      "2026-08-13T00:12:00Z",
+      "2026-08-13T00:17:00Z",
+    ])
+      await reconcileScheduledPublications(
+        database,
+        provider,
+        { sendOwner } as unknown as DeliveryService,
+        new Date(time),
+      );
+
+    expect(database.getXOperation(operation.logicalId)!.status).toBe(
+      "publishing",
+    );
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toContain("not yet verified");
+    expect(provider.mutate).toHaveBeenCalledTimes(5);
     database.close();
   });
 
@@ -1598,6 +1668,82 @@ describe("ambiguous Zernio operation reconciliation", () => {
     const notification = database.getXOperation(operation.logicalId)!;
     expect(notification.notificationAttempts).toBe(3);
     expect(notification.notificationMessage).toContain("verified as published");
+    database.close();
+  });
+
+  it("keeps a parked terminal notification deliverable after fast retries are exhausted", async () => {
+    const database = new ApplicationDatabase(":memory:");
+    database.migrate();
+    database.claimInbound({
+      id: "owner-1",
+      senderIdentity: "923001234567@s.whatsapp.net",
+      body: "post it",
+      receivedAt: "2026-08-13T00:00:00Z",
+    });
+    database.createAuthorization({
+      sourceMessageId: "owner-1",
+      operation: "publish",
+      authorizedContent: "hello",
+      now: new Date("2026-08-13T00:00:00Z"),
+    });
+    const provider = {
+      mutate: vi.fn(async () => ({
+        status: "publishing" as const,
+        providerId: "z-1",
+      })),
+      getPost: vi.fn(async () => ({
+        status: "published" as const,
+        platforms: [
+          {
+            platform: "twitter" as const,
+            status: "published" as const,
+            platformPostId: "x-1",
+            platformPostUrl: "https://x.com/stan/status/x-1",
+          },
+        ],
+      })),
+    };
+    const operation = await new ZernioWriteService(database, provider).execute(
+      { sourceMessageId: "owner-1", selectedAccountId: "account-1" },
+      { operation: "publish", content: "hello" },
+    );
+    setOperationCreatedAt(database, operation.logicalId);
+    const sendOwner = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("WhatsApp offline"))
+      .mockRejectedValueOnce(new Error("WhatsApp offline"))
+      .mockRejectedValueOnce(new Error("WhatsApp offline"))
+      .mockResolvedValueOnce({ messageId: "out-1" });
+    const delivery = { sendOwner } as unknown as DeliveryService;
+
+    for (const time of [
+      "2026-08-13T00:02:00Z",
+      "2026-08-13T00:03:00Z",
+      "2026-08-13T00:05:00Z",
+    ])
+      await reconcileScheduledPublications(
+        database,
+        provider,
+        delivery,
+        new Date(time),
+      );
+
+    const parked = database.getXOperation(operation.logicalId)!;
+    expect(parked.notificationMessage).toContain("verified as published");
+    expect(parked.notificationAttempts).toBe(3);
+    expect(parked.nextRetryAt).toBe("2026-08-13T01:05:00.000Z");
+
+    await reconcilePendingXOperations(
+      database,
+      provider,
+      delivery,
+      new Date("2026-08-13T01:06:00Z"),
+    );
+
+    expect(sendOwner).toHaveBeenCalledTimes(4);
+    const delivered = database.getXOperation(operation.logicalId)!;
+    expect(delivered.notificationMessage).toBeNull();
+    expect(delivered.nextRetryAt).toBeNull();
     database.close();
   });
 });

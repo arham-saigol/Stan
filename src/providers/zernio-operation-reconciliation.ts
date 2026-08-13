@@ -227,7 +227,9 @@ async function deliverQueuedResult(
       )
       .run(operation.logicalId);
   } catch {
-    const attempts = operation.notificationAttempts + 1;
+    // The notification must stay deliverable: keep a due time even after the
+    // fast backoff is exhausted, retrying hourly instead of dead-lettering.
+    const attempts = Math.min(operation.notificationAttempts + 1, 3);
     database.database
       .prepare(
         `UPDATE x_operations SET notification_attempts = ?, next_retry_at = ?, updated_at = ?
@@ -235,11 +237,10 @@ async function deliverQueuedResult(
       )
       .run(
         attempts,
-        attempts >= 3
-          ? null
-          : new Date(
-              now.getTime() + 60_000 * 2 ** (attempts - 1),
-            ).toISOString(),
+        new Date(
+          now.getTime() +
+            (attempts >= 3 ? 60 * 60_000 : 60_000 * 2 ** (attempts - 1)),
+        ).toISOString(),
         now.toISOString(),
         operation.logicalId,
       );

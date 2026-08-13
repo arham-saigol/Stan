@@ -36,13 +36,15 @@ const command =
   /^(post|publish|tweet|schedule|queue|reply|respond|edit|cancel|unschedule|delete|unpublish)\b/i;
 const futureTime =
   /\b(?:tomorrow|tonight|later|next\s+\w+|after\s+\w+|at\s+(?:the\s+)?(?:best|optimal)\s+time|at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?|on\s+(?:mon|tues|wednes|thurs|fri|satur|sun)day|on\s+\d{4}-\d{2}-\d{2})\b/i;
+const selection =
+  /\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|next|last)\b|#\s*\d{1,2}\b|\b(?:the\s+|number\s+|item\s+|option\s+)(?:one|two|three|four|five|six|seven|eight|nine|ten|\d{1,2}(?:st|nd|rd|th)?)\b|(?<![\d:+-])\d{1,2}(?:st|nd|rd|th)?\b(?![\d:])/i;
 
 export function deriveAuthorizationOperation(
   text: string,
 ): AuthorizationOperation | undefined {
   const normalized = text.trim().replace(prefixes, "");
   if (
-    /^(?:(?:create|add|schedule)\s+automation|set\s+up\s+automation|(?:pause|disable|enable|resume|delete|remove)\s+automation\b|edit\s+workspace\b|update\s+heartbeat\b|forget\s+memory\b|remember\s*:)/i.test(
+    /^(?:(?:create|add|schedule)\s+automation|set\s+up\s+automation|(?:pause|disable|enable|resume|delete|remove)\s+automation\b|cancel\s+(?:this|that|the)?\s*automation\b|(?:cancel|delete)\s+(?:this|that|the)?\s*(?:memory|reminder|note|file)\b|schedule\s+(?:this|that|the)?\s*reminder\b|edit\s+workspace\b|update\s+heartbeat\b|forget\s+memory\b|remember\s*:)/i.test(
       normalized,
     )
   )
@@ -64,31 +66,40 @@ export function deriveAuthorizationOperation(
     return futureTime.test(normalized) ? "schedule" : "publish";
   }
   if (operation === "schedule" || operation === "queue") {
-    return /\b(?:x|post|tweet)\b/i.test(normalized) ? "schedule" : undefined;
+    return /\b(?:x|post|tweet|this|that|it|one|them)\b/i.test(normalized) ||
+      selection.test(normalized)
+      ? "schedule"
+      : undefined;
   }
   if (operation === "reply" || operation === "respond") {
-    return /\b(?:x|post|tweet|this|that|it|thread)\b|@\w+|https?:\/\//i.test(
+    return /\b(?:x|post|tweet|this|that|it|them|him|her|thread)\b|@\w+|https?:\/\//i.test(
       normalized,
-    )
+    ) || selection.test(normalized)
       ? "reply"
       : undefined;
   }
   if (operation === "edit") {
-    return /\b(?:x|post|tweet|published|live|zernio|status\/\d+)\b/i.test(
+    return /\b(?:x|post|tweet|published|live|zernio|status\/\d+|it|that|them|him|her)\b/i.test(
       normalized,
-    )
+    ) || selection.test(normalized)
       ? "edit"
       : undefined;
   }
   if (operation === "cancel" || operation === "unschedule") {
     return operation === "unschedule" ||
-      /\b(?:x|post|tweet|publication|zernio)\b/i.test(normalized)
+      /\b(?:x|post|tweet|publication|zernio|scheduled|it|that|them|him|her)\b/i.test(
+        normalized,
+      ) ||
+      selection.test(normalized)
       ? "cancel"
       : undefined;
   }
   if (operation === "delete" || operation === "unpublish") {
     return operation === "unpublish" ||
-      /\b(?:x|post|tweet|publication|zernio)\b/i.test(normalized)
+      /\b(?:x|post|tweet|publication|zernio|it|that|them|him|her)\b/i.test(
+        normalized,
+      ) ||
+      selection.test(normalized)
       ? "delete"
       : undefined;
   }
@@ -101,17 +112,29 @@ export function deriveAuthorization(
 ): DerivedAuthorization | undefined {
   const operation = deriveAuthorizationOperation(text);
   if (!operation) return undefined;
-  const authorizedContent = contentOperation(operation)
-    ? quotedText?.trim()
-    : undefined;
-  if (
-    contentOperation(operation) &&
-    (!authorizedContent || authorizedContent.length > 25_000)
-  )
-    return undefined;
+  const quoted = quotedText?.trim();
+  const referenced = selection.test(text);
+  // The owner's quoted text binds the content verbatim for draft/publish/schedule
+  // unless the command points at a numbered item instead ("post the second one").
+  // Reply/edit content is never bound: the quoted text there is usually the target.
+  const authorizedContent =
+    (operation === "draft" ||
+      operation === "publish" ||
+      operation === "schedule") &&
+    quoted &&
+    !referenced &&
+    quoted.length <= 25_000
+      ? quoted
+      : undefined;
   const authorizedScheduledFor =
     operation === "schedule" ? extractScheduledInstant(text) : undefined;
-  if (operation === "schedule" && !authorizedScheduledFor) return undefined;
+  // A verbatim but invalid ISO instant must not be silently reinterpreted.
+  if (
+    operation === "schedule" &&
+    /\b\d{4}-\d{2}-\d{2}T/.test(text) &&
+    !authorizedScheduledFor
+  )
+    return undefined;
   if (!isTargetedMutation(operation)) {
     return {
       operation,
@@ -121,13 +144,10 @@ export function deriveAuthorization(
   }
   const targetPostId =
     extractTargetPostId(text) ?? extractTargetPostId(quotedText ?? "");
-  return targetPostId
-    ? {
-        operation,
-        targetPostId,
-        ...(authorizedContent ? { authorizedContent } : {}),
-      }
-    : undefined;
+  return {
+    operation,
+    ...(targetPostId ? { targetPostId } : {}),
+  };
 }
 
 export function deriveAutomationAuthorization(
@@ -391,16 +411,6 @@ function validOptionalInteger(
       Number.isInteger(value) &&
       value >= minimum &&
       value <= maximum)
-  );
-}
-
-function contentOperation(operation: AuthorizationOperation): boolean {
-  return (
-    operation === "draft" ||
-    operation === "publish" ||
-    operation === "schedule" ||
-    operation === "reply" ||
-    operation === "edit"
   );
 }
 

@@ -329,6 +329,14 @@ export async function reconcileScheduledPublications(
             : new Date(now.getTime() + 5 * 60_000).toISOString(),
           row.logical_operation_id,
         );
+      if (
+        exhausted &&
+        (row.operation === "cancel" || row.operation === "delete") &&
+        observed === "scheduled" &&
+        row.notified_status !== "publishing"
+      ) {
+        await notifyPendingCancellation(database, delivery, row);
+      }
     }
   }
   return rows.length;
@@ -392,6 +400,27 @@ function queueTerminalNotification(
     .run(status, status, message, now.toISOString(), logicalId);
 }
 
+async function notifyPendingCancellation(
+  database: ApplicationDatabase,
+  delivery: DeliveryService | undefined,
+  row: { logical_operation_id: string; operation: string },
+): Promise<void> {
+  if (!delivery) return;
+  try {
+    await delivery.sendOwner(
+      `Your X ${row.operation} is not yet verified: the target remains scheduled after bounded polling. Stan keeps monitoring and retrying it.`,
+      `x-operation:${row.logical_operation_id}:pending`,
+    );
+    database.database
+      .prepare(
+        "UPDATE scheduled_publications SET notified_status = 'publishing' WHERE logical_operation_id = ?",
+      )
+      .run(row.logical_operation_id);
+  } catch {
+    // WhatsApp is unavailable; retry the pending notice on a later poll.
+  }
+}
+
 async function deliverTerminalNotification(
   database: ApplicationDatabase,
   delivery: DeliveryService | undefined,
@@ -421,11 +450,12 @@ async function deliverTerminalNotification(
         database.database
           .prepare(
             `UPDATE x_operations SET notification_message = ?, notification_attempts = ?,
-             next_retry_at = NULL, updated_at = ? WHERE logical_id = ?`,
+             next_retry_at = ?, updated_at = ? WHERE logical_id = ?`,
           )
           .run(
             row.notification_message,
             attempts,
+            new Date(now.getTime() + 60 * 60_000).toISOString(),
             now.toISOString(),
             row.logical_operation_id,
           );

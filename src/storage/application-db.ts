@@ -668,7 +668,8 @@ export class ApplicationDatabase {
           input.operation === "edit" ||
           input.operation === "cancel" ||
           input.operation === "delete") &&
-        (!envelope.targetPostId || envelope.targetPostId !== input.targetPostId)
+        envelope.targetPostId &&
+        envelope.targetPostId !== input.targetPostId
       ) {
         throw new Error(
           "The requested X post does not match the target authorized by the owner",
@@ -680,8 +681,8 @@ export class ApplicationDatabase {
           input.operation === "schedule" ||
           input.operation === "reply" ||
           input.operation === "edit") &&
-        (!envelope.authorizedContent ||
-          envelope.authorizedContent !== input.content)
+        envelope.authorizedContent &&
+        envelope.authorizedContent !== input.content
       ) {
         throw new Error(
           "The requested X content does not match the exact text authorized by the owner",
@@ -689,8 +690,8 @@ export class ApplicationDatabase {
       }
       if (
         input.operation === "schedule" &&
-        (!envelope.authorizedScheduledFor ||
-          envelope.authorizedScheduledFor !== input.scheduledFor)
+        envelope.authorizedScheduledFor &&
+        envelope.authorizedScheduledFor !== input.scheduledFor
       ) {
         throw new Error(
           "The requested X schedule does not match the exact time authorized by the owner",

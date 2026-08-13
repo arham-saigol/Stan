@@ -73,7 +73,10 @@ describe("declarative automations", () => {
       now: new Date("2026-08-13T00:00:00Z"),
     });
 
-    expect(store.claimDue(new Date("2026-08-13T05:30:00Z"))).toHaveLength(1);
+    const claimed = store.claimDue(new Date("2026-08-13T05:30:00Z"));
+
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]!.scheduledFor).toBe("2026-08-13T05:30:00.000Z");
     expect(
       new Date(store.get(automation.id)!.nextRunAt!).getTime(),
     ).toBeGreaterThan(new Date("2026-08-13T05:30:00Z").getTime());
@@ -402,14 +405,19 @@ describe("declarative automations", () => {
     expect(
       database.database
         .prepare(
-          "SELECT local_date, conversation_id, state FROM daily_sessions WHERE local_date = '2026-08-13'",
+          "SELECT local_date, conversation_id, state FROM daily_sessions WHERE local_date = '2026-08-15'",
         )
         .get(),
     ).toEqual({
-      local_date: "2026-08-13",
-      conversation_id: "stan-owner-2026-08-13",
+      local_date: "2026-08-15",
+      conversation_id: "stan-owner-2026-08-15",
       state: "active",
     });
+    expect(
+      database.database
+        .prepare("SELECT 1 FROM daily_sessions WHERE local_date = '2026-08-13'")
+        .get(),
+    ).toBeUndefined();
     database.close();
   });
 
