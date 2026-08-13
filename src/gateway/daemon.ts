@@ -154,10 +154,6 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
         await repairDailyRollover(database, memory, logger, now);
         if (memory) await reconcilePendingMemory(database, memory);
         const whatsappOpen = whatsapp.status() === "open";
-        if (whatsappOpen) {
-          await ingress.reconcilePending();
-          await reconcilePendingReplies(database, delivery);
-        }
         if (zernio) {
           await reconcilePendingXOperations(
             database,
@@ -171,6 +167,10 @@ export async function runDaemon(root = resolveStateRoot()): Promise<void> {
             whatsappOpen ? delivery : undefined,
             new Date(now.epochMilliseconds),
           );
+        }
+        if (whatsappOpen) {
+          await reconcilePendingReplies(database, delivery);
+          await ingress.reconcilePending();
         }
       },
       async () => {
