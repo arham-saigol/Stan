@@ -168,12 +168,17 @@ export async function reconcileScheduledPublications(
       observed === "published" &&
       (row.operation === "draft" || row.operation === "cancel");
     const expectedSchedule = scheduledFor(row.operation, row.request_json);
+    const scheduleVerified =
+      observed === "scheduled" &&
+      Boolean(post.scheduledFor) &&
+      sameInstant(post.scheduledFor!, expectedSchedule);
     const scheduleMismatch =
       row.operation === "schedule" &&
       ((observed === "scheduled" &&
         Boolean(post.scheduledFor) &&
         !sameInstant(post.scheduledFor!, expectedSchedule)) ||
-        Boolean(row.operation_error?.includes("owner-authorized instant")));
+        (!scheduleVerified &&
+          Boolean(row.operation_error?.includes("owner-authorized instant"))));
     let driftCancelled = scheduleMismatch && observed === "cancelled";
     if (scheduleMismatch && observed !== "cancelled" && provider.mutate) {
       try {

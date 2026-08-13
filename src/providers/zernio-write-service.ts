@@ -221,8 +221,8 @@ export class ZernioWriteService {
           : { scheduledFor: result.scheduledFor }),
         error: unverifiableSchedule
           ? driftCancelled
-            ? "Zernio did not verify the exact authorized schedule instant; the unsafe schedule was cancelled"
-            : "Zernio did not verify the exact authorized schedule instant; cancellation is not yet verified"
+            ? "Zernio did not verify the exact owner-authorized instant; the unsafe schedule was cancelled"
+            : "Zernio did not verify the exact owner-authorized instant; cancellation is not yet verified"
           : (result.error ?? null),
       });
       if (
