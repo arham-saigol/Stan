@@ -101,14 +101,6 @@ CREATE TABLE IF NOT EXISTS automation_authorizations (
   consumed_at TEXT,
   result_json TEXT
 ) STRICT;
-CREATE TABLE IF NOT EXISTS workspace_authorizations (
-  source_message_id TEXT PRIMARY KEY REFERENCES inbound_messages(provider_message_id),
-  operation TEXT NOT NULL CHECK (operation = 'edit'),
-  payload_json TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  consumed_at TEXT,
-  result_content TEXT
-) STRICT;
 CREATE TABLE IF NOT EXISTS memory_authorizations (
   source_message_id TEXT PRIMARY KEY REFERENCES inbound_messages(provider_message_id),
   operation TEXT NOT NULL CHECK (operation IN ('remember', 'forget')),
@@ -236,13 +228,6 @@ CREATE TABLE IF NOT EXISTS memory_documents (
   last_error TEXT,
   updated_at TEXT NOT NULL
 ) STRICT;
-CREATE TABLE IF NOT EXISTS workspace_history (
-  id INTEGER PRIMARY KEY,
-  logical_name TEXT NOT NULL,
-  previous_content TEXT NOT NULL,
-  source_message_id TEXT,
-  created_at TEXT NOT NULL
-) STRICT;
 CREATE TABLE IF NOT EXISTS watchlist_state (
   watch_key TEXT PRIMARY KEY,
   last_checked_at TEXT,
@@ -363,12 +348,6 @@ export class ApplicationDatabase {
         this.database,
         "automation_authorizations",
         "result_json",
-        "TEXT",
-      );
-      addColumnIfMissing(
-        this.database,
-        "workspace_authorizations",
-        "result_content",
         "TEXT",
       );
       addColumnIfMissing(
@@ -800,83 +779,6 @@ export class ApplicationDatabase {
       throw new Error("Automation mutation outcome could not be recorded");
   }
 
-  createWorkspaceAuthorization(
-    sourceMessageId: string,
-    payloadJson: string,
-    now = new Date(),
-  ): void {
-    this.database
-      .prepare(
-        `INSERT OR IGNORE INTO workspace_authorizations(source_message_id, operation, payload_json, created_at)
-         VALUES (?, 'edit', ?, ?)`,
-      )
-      .run(sourceMessageId, payloadJson, now.toISOString());
-  }
-
-  beginWorkspaceEdit(
-    sourceMessageId: string,
-    payloadJson: string,
-  ): string | undefined {
-    const now = new Date();
-    return this.transaction(() => {
-      const existing = this.database
-        .prepare(
-          `SELECT consumed_at, result_content FROM workspace_authorizations
-           WHERE source_message_id = ? AND operation = 'edit' AND payload_json = ?`,
-        )
-        .get(sourceMessageId, payloadJson) as
-        | { consumed_at: string | null; result_content: string | null }
-        | undefined;
-      if (
-        existing?.result_content !== null &&
-        existing?.result_content !== undefined
-      )
-        return existing.result_content;
-      if (existing?.consumed_at) return undefined;
-      const result = this.database
-        .prepare(
-          `UPDATE workspace_authorizations SET consumed_at = ?
-           WHERE source_message_id = ? AND operation = 'edit' AND payload_json = ?
-             AND consumed_at IS NULL AND created_at > ?`,
-        )
-        .run(
-          now.toISOString(),
-          sourceMessageId,
-          payloadJson,
-          new Date(now.getTime() - 15 * 60_000).toISOString(),
-        );
-      if (result.changes !== 1) {
-        throw new Error(
-          "Current owner authorization is required to edit a workspace file",
-        );
-      }
-      return undefined;
-    });
-  }
-
-  finishWorkspaceEdit(
-    sourceMessageId: string,
-    payloadJson: string,
-    content: string,
-  ): void {
-    const result = this.database
-      .prepare(
-        `UPDATE workspace_authorizations SET result_content = ?
-         WHERE source_message_id = ? AND operation = 'edit' AND payload_json = ?
-           AND consumed_at IS NOT NULL AND result_content IS NULL`,
-      )
-      .run(content, sourceMessageId, payloadJson);
-    if (result.changes === 1) return;
-    const existing = this.database
-      .prepare(
-        `SELECT 1 FROM workspace_authorizations WHERE source_message_id = ?
-         AND operation = 'edit' AND payload_json = ? AND result_content = ?`,
-      )
-      .get(sourceMessageId, payloadJson, content);
-    if (!existing)
-      throw new Error("Workspace edit outcome could not be recorded");
-  }
-
   createMemoryAuthorization(
     sourceMessageId: string,
     operation: MemoryAuthorizationOperation,
@@ -1008,11 +910,6 @@ export class ApplicationDatabase {
       this.database
         .prepare(
           "UPDATE automation_authorizations SET consumed_at = COALESCE(consumed_at, ?) WHERE source_message_id = ?",
-        )
-        .run(timestamp, sourceMessageId);
-      this.database
-        .prepare(
-          "UPDATE workspace_authorizations SET consumed_at = COALESCE(consumed_at, ?) WHERE source_message_id = ?",
         )
         .run(timestamp, sourceMessageId);
       this.database

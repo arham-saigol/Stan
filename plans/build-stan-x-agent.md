@@ -108,7 +108,7 @@ src/
       HEARTBEATS.md
       WATCHLIST.md
       voice/PROFILE.md
-      voice/EXAMPLES.md
+      voice/EVIDENCE.md
   providers/
     xquik.ts
     zernio.ts
@@ -293,18 +293,21 @@ Initialize these mutable files:
 - `HEARTBEATS.md`: editable morning/heartbeat prompt and short standing checklist.
 - `WATCHLIST.md`: public X profiles/topics Stan wants to track, with handle/query, rationale, status, and desired check cadence. SQLite records actual last checks and cursors.
 - `voice/PROFILE.md`: mutable voice preferences.
-- `voice/EXAMPLES.md`: curated positive/negative examples.
+- `voice/EVIDENCE.md`: source record for owner-written and owner-approved voice evidence.
 
 Do not create a generic `MEMORY.md` or daily Markdown logs; those would compete with Supermemory and exact local activity state.
 
-Expose exactly one generic reader and one generic editor for workspace documents, not separate tools per file:
+Expose generic workspace lifecycle tools, not separate tools per file:
 
 ```text
+list_workspace_files()
 read_workspace_file({ file })
 edit_workspace_file({ file, operation, oldText?, text })
+create_workspace_file({ file, content })
+delete_workspace_file({ file })
 ```
 
-`file` must be an allowlisted logical name/enumeration resolved by trusted code. Reject path separators, traversal, symlinks, unknown files, binary content, oversized content, and writes beyond a configured per-file limit. Make replacement exact and atomic; permit bounded append for adding watchlist or examples. Keep versioned backups or a small edit history so accidental agent edits can be repaired. The tools cannot reach source code, credentials, logs, SQLite, Baileys auth, or arbitrary files.
+`file` is a logical name resolved inside the workspace. Reject path separators, traversal, symlinks, non-regular files, oversized content, and writes beyond a configured per-file limit. Make replacement exact and atomic; keep a small backup history for edits and deletions. The tools cannot reach source code, credentials, logs, SQLite, Baileys auth, or arbitrary files.
 
 Do not inject every workspace file into every system prompt:
 
@@ -312,7 +315,7 @@ Do not inject every workspace file into every system prompt:
 - Inject bounded `GOALS.md` and `STRATEGY.md` operating context on owner and proactive turns.
 - Inject `HEARTBEATS.md` and relevant `WATCHLIST.md` entries only on morning/heartbeat turns.
 - Load `PLAYBOOK.md` when drafting or reviewing analytics, either through the voice skill's procedure or the generic workspace reader.
-- Package/load voice profile and examples through the voice skill only when writing or evaluating content.
+- Package/load voice profile and evidence through the voice skill only when writing or evaluating content.
 - Bound all injected sections and surface truncation explicitly rather than silently consuming unbounded prompt space.
 
 This gives reliable context where it is required while preserving progressive disclosure and prompt-cache efficiency.
@@ -321,7 +324,7 @@ This gives reliable context where it is required while preserving progressive di
 
 Create two model-invoked Flue skills:
 
-1. **`voice`** — writing and evaluation procedure for human posts, replies, quote posts, and threads; it should direct the agent to the mutable voice profile, examples, strategy, and playbook only when needed.
+1. **`voice`** — writing and evaluation procedure for human posts, replies, quote posts, and threads; it should direct the agent to the mutable voice profile, evidence, strategy, and playbook only when needed.
 2. **`stan`** — operating procedure for inspecting/updating heartbeat settings, turning heartbeats off/on, editing `HEARTBEATS.md`, managing exact automations, maintaining the watchlist and workspace, choosing Supermemory versus exact state, and preserving public-write boundaries.
 
 When creating or editing either skill, the implementation agent must use the repository's `writing-for-agents` skill at `.agents/skills/writing-for-agents/SKILL.md`, read it completely, and follow its `SKILL-MECHANICS.md` reference before writing. Apply its progressive-disclosure, context-pointer, single-source-of-truth, co-location, completion-criterion, and pruning guidance. Keep model-invoked descriptions short but explicit about their genuine trigger branches. Do not duplicate runtime configuration or tool schemas inside skill prose when the agent can inspect them through tools.
@@ -396,7 +399,7 @@ Track token/model usage for owner, heartbeat, automation, and compaction runs se
 5. Add XQuik and Firecrawl read tools plus the voice skill; deliver a drafting-only vertical slice.
 6. Add Zernio reads and exact local content/analytics records.
 7. Implement authorization envelopes, Zernio mutations, idempotent reconciliation, and publication-status reporting.
-8. Add workspace templates, generic allowlisted read/edit tools, and the `stan` operations skill.
+8. Add workspace templates, generic workspace lifecycle tools, and the `stan` operations skill.
 9. Add Supermemory profile, retrieval, explicit memory tools, daily transcript ingestion, and degraded-mode handling.
 10. Add 00:01 rollover, anchored morning/heartbeat monitor, structured silent response, leases, catch-up, and WATCHLIST rotation.
 11. Add declarative one-shot/cron automations and their management tools.
@@ -427,7 +430,7 @@ Prove at least:
 - Daemon restart does not shift anchored cadence or burst-replay missed occurrences.
 - Disabling heartbeats prevents model calls; re-enabling and editing start/end/interval updates the next occurrence durably.
 - Editing `HEARTBEATS.md` changes the next heartbeat prompt without modifying immutable safety context.
-- The generic workspace tools access only allowlisted files and reject traversal, symlinks, oversize writes, and stale exact replacements.
+- The generic workspace tools list and manage only workspace documents, rejecting traversal, symlinks, oversize writes, and stale exact replacements.
 - WATCHLIST checks are bounded and rotated rather than all fetched every heartbeat.
 - Cron expressions are validated; duplicate occurrences run once; automations cannot execute shell or public X writes.
 - Supermemory outage does not block owner chat or authorized publishing; pending ingestion later reconciles once.

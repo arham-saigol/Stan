@@ -9,7 +9,7 @@ import { redactForLogging } from "../../logging.ts";
 import { ZernioProvider } from "../../providers/zernio.ts";
 import { XQuikProvider } from "../../providers/xquik.ts";
 import { statePaths } from "../../state.ts";
-import { WorkspaceStore, WORKSPACE_FILES } from "../../workspace/store.ts";
+import { WorkspaceStore } from "../../workspace/store.ts";
 import { getDaemonStatus } from "./service.ts";
 
 interface Check {
@@ -63,11 +63,9 @@ export async function doctorCommand(root: string): Promise<void> {
   });
   await run("workspace", async () => {
     const workspace = new WorkspaceStore(paths.workspace);
-    for (const name of Object.keys(
-      WORKSPACE_FILES,
-    ) as (keyof typeof WORKSPACE_FILES)[])
-      await workspace.read(name);
-    return "allowlisted files valid";
+    const files = await workspace.list();
+    await Promise.all(files.map((file) => workspace.read(file)));
+    return `${files.length} workspace files valid`;
   });
   await run("Codex", async () =>
     (await verifyCodexRefresh(root))
