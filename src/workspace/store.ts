@@ -31,8 +31,18 @@ interface HistoryEntry {
   createdAt: string;
 }
 
+interface MutationEntry {
+  operationKey: string;
+  operation: "edit" | "create" | "delete";
+  file: WorkspaceFile;
+  result: string | null;
+  backup?: string;
+  status: "pending" | "complete";
+  createdAt: string;
+}
+
 const customFileName = /^[a-z][a-z0-9_]{0,63}$/;
-const initializedMarker = ".initialized";
+const operationsFile = "operations.json";
 
 export class WorkspaceStore {
   private readonly maxBytes: number;
@@ -50,28 +60,23 @@ export class WorkspaceStore {
     await mkdir(join(this.root, "voice"), { recursive: true, mode: 0o700 });
     await mkdir(join(this.root, ".history"), { recursive: true, mode: 0o700 });
 
-    const initialized = await this.exists(join(this.root, initializedMarker));
-    if (!initialized) {
-      for (const [file, relative] of Object.entries(WORKSPACE_FILES)) {
-        const target = join(this.root, relative);
-        if (await this.exists(target)) {
-          await this.assertSafe(file);
-          continue;
-        }
-        const template = await readFile(
-          join(import.meta.dirname, "templates", relative),
-          "utf8",
-        );
-        await atomicWritePrivate(target, template);
+    for (const [file, relative] of Object.entries(WORKSPACE_FILES)) {
+      const target = join(this.root, relative);
+      if (await this.exists(target)) {
         await this.assertSafe(file);
+        continue;
       }
-      await atomicWritePrivate(join(this.root, initializedMarker), "\n");
-    }
-    if (!(await this.exists(join(this.root, ".history", "index.json"))))
-      await atomicWritePrivate(
-        join(this.root, ".history", "index.json"),
-        "[]\n",
+      const template = await readFile(
+        join(import.meta.dirname, "templates", relative),
+        "utf8",
       );
+      await atomicWritePrivate(target, template);
+      await this.assertSafe(file);
+    }
+    for (const file of ["index.json", operationsFile]) {
+      const path = join(this.root, ".history", file);
+      if (!(await this.exists(path))) await atomicWritePrivate(path, "[]\n");
+    }
   }
 
   async list(): Promise<WorkspaceFile[]> {
@@ -105,18 +110,50 @@ export class WorkspaceStore {
     return this.readContent(await this.assertSafe(file));
   }
 
-  edit(file: WorkspaceFile, edit: WorkspaceEdit): Promise<string> {
+  edit(
+    file: WorkspaceFile,
+    edit: WorkspaceEdit,
+    operationKey: string,
+  ): Promise<string> {
     return this.mutate(async () => {
+      const previous = await this.findMutation(operationKey, "edit");
+      if (previous) {
+        const result = await this.replayMutation(previous);
+        if (result === null)
+          throw new Error("Workspace mutation outcome is invalid");
+        return result;
+      }
       const current = await this.read(file);
       const next = this.editedContent(current, edit);
-      await this.backup(file, current);
+      const entry: MutationEntry = {
+        operationKey: this.assertOperationKey(operationKey),
+        operation: "edit",
+        file,
+        result: next,
+        backup: await this.backup(file, current),
+        status: "pending",
+        createdAt: new Date().toISOString(),
+      };
+      await this.recordMutation(entry);
       await atomicWritePrivate(await this.assertSafe(file), next);
+      await this.completeMutation(entry);
       return next;
     });
   }
 
-  create(file: WorkspaceFile, content: string): Promise<string> {
+  create(
+    file: WorkspaceFile,
+    content: string,
+    operationKey: string,
+  ): Promise<string> {
     return this.mutate(async () => {
+      const previous = await this.findMutation(operationKey, "create");
+      if (previous) {
+        const result = await this.replayMutation(previous);
+        if (result === null)
+          throw new Error("Workspace mutation outcome is invalid");
+        return result;
+      }
       this.assertSize(
         content,
         "Workspace file exceeds the configured size limit",
@@ -124,16 +161,41 @@ export class WorkspaceStore {
       const path = await this.pathFor(file);
       if (await this.exists(path))
         throw new Error("Workspace file already exists");
+      const entry: MutationEntry = {
+        operationKey: this.assertOperationKey(operationKey),
+        operation: "create",
+        file,
+        result: content,
+        status: "pending",
+        createdAt: new Date().toISOString(),
+      };
+      await this.recordMutation(entry);
       await atomicWritePrivate(path, content);
+      await this.completeMutation(entry);
       return content;
     });
   }
 
-  delete(file: WorkspaceFile): Promise<void> {
+  delete(file: WorkspaceFile, operationKey: string): Promise<void> {
     return this.mutate(async () => {
+      const previous = await this.findMutation(operationKey, "delete");
+      if (previous) {
+        await this.replayMutation(previous);
+        return;
+      }
       const path = await this.assertSafe(file);
-      await this.backup(file, await this.readContent(path));
+      const entry: MutationEntry = {
+        operationKey: this.assertOperationKey(operationKey),
+        operation: "delete",
+        file,
+        result: null,
+        backup: await this.backup(file, await this.readContent(path)),
+        status: "pending",
+        createdAt: new Date().toISOString(),
+      };
+      await this.recordMutation(entry);
       await unlink(path);
+      await this.completeMutation(entry);
     });
   }
 
@@ -144,6 +206,88 @@ export class WorkspaceStore {
       () => undefined,
     );
     return result;
+  }
+
+  private async replayMutation(entry: MutationEntry): Promise<string | null> {
+    if (entry.status === "pending") {
+      const path = await this.pathFor(entry.file);
+      if (entry.operation === "edit") {
+        const current = await this.readContent(
+          await this.assertSafe(entry.file),
+        );
+        if (current !== entry.result && entry.backup) {
+          const before = await this.readContent(
+            join(this.root, ".history", entry.backup),
+          );
+          if (current === before) await atomicWritePrivate(path, entry.result!);
+        }
+      } else if (entry.operation === "create") {
+        if (!(await this.exists(path)))
+          await atomicWritePrivate(path, entry.result!);
+      } else if ((await this.exists(path)) && entry.backup) {
+        const current = await this.readContent(
+          await this.assertSafe(entry.file),
+        );
+        const before = await this.readContent(
+          join(this.root, ".history", entry.backup),
+        );
+        if (current === before) await unlink(path);
+      }
+      await this.completeMutation(entry);
+    }
+    return entry.result;
+  }
+
+  private async findMutation(
+    operationKey: string,
+    operation: MutationEntry["operation"],
+  ): Promise<MutationEntry | undefined> {
+    this.assertOperationKey(operationKey);
+    const entry = (await this.mutations()).find(
+      (candidate) => candidate.operationKey === operationKey,
+    );
+    if (entry && entry.operation !== operation)
+      throw new Error("Workspace operation key is already in use");
+    return entry;
+  }
+
+  private async recordMutation(entry: MutationEntry): Promise<void> {
+    const entries = await this.mutations();
+    entries.push(entry);
+    await this.writeMutations(entries);
+  }
+
+  private async completeMutation(entry: MutationEntry): Promise<void> {
+    const entries = await this.mutations();
+    const stored = entries.find(
+      (candidate) => candidate.operationKey === entry.operationKey,
+    );
+    if (!stored) throw new Error("Workspace mutation outcome is missing");
+    stored.status = "complete";
+    await this.writeMutations(entries);
+  }
+
+  private async mutations(): Promise<MutationEntry[]> {
+    return JSON.parse(
+      await readFile(join(this.root, ".history", operationsFile), "utf8"),
+    ) as MutationEntry[];
+  }
+
+  private writeMutations(entries: MutationEntry[]): Promise<void> {
+    return atomicWritePrivate(
+      join(this.root, ".history", operationsFile),
+      `${JSON.stringify(entries, null, 2)}\n`,
+    );
+  }
+
+  private assertOperationKey(operationKey: string): string {
+    if (
+      typeof operationKey !== "string" ||
+      !operationKey ||
+      operationKey.length > 512
+    )
+      throw new Error("Workspace operation key is invalid");
+    return operationKey;
   }
 
   private editedContent(current: string, edit: WorkspaceEdit): string {
@@ -209,7 +353,7 @@ export class WorkspaceStore {
     if (Buffer.byteLength(content) > this.maxBytes) throw new Error(message);
   }
 
-  private async backup(file: WorkspaceFile, content: string): Promise<void> {
+  private async backup(file: WorkspaceFile, content: string): Promise<string> {
     const indexPath = join(this.root, ".history", "index.json");
     const entries = JSON.parse(
       await readFile(indexPath, "utf8"),
@@ -235,6 +379,7 @@ export class WorkspaceStore {
         ),
       ),
     );
+    return backup;
   }
 
   private async exists(path: string): Promise<boolean> {

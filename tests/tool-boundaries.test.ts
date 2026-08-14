@@ -14,7 +14,10 @@ import {
   memoryMutationPayload,
 } from "../src/gateway/owner-authorization.ts";
 
-type Run = (context: { data: Record<string, unknown> }) => Promise<unknown>;
+type Run = (context: {
+  data: Record<string, unknown>;
+  toolCallId?: string;
+}) => Promise<unknown>;
 
 describe("trusted tool boundaries", () => {
   it("allows only the owned running heartbeat to settle once", async () => {
@@ -62,13 +65,19 @@ describe("trusted tool boundaries", () => {
     )!;
     const data = { file: "goals", operation: "append", text: "Ship Stan" };
 
-    await expect((tool.run as Run)({ data })).resolves.toMatchObject({
+    await expect(
+      (tool.run as Run)({ data, toolCallId: "heartbeat-edit-1" }),
+    ).resolves.toMatchObject({
       output: { file: "goals", content: "updated" },
     });
-    expect(edit).toHaveBeenCalledWith("goals", {
-      operation: "append",
-      text: "Ship Stan",
-    });
+    expect(edit).toHaveBeenCalledWith(
+      "goals",
+      {
+        operation: "append",
+        text: "Ship Stan",
+      },
+      "heartbeat-edit-1",
+    );
   });
 
   it("returns the prior heartbeat settings result on an exact retry", async () => {

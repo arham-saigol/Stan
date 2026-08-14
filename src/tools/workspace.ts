@@ -33,7 +33,7 @@ export function workspaceTools(workspace: WorkspaceStore): ToolDefinition[] {
         oldText: v.optional(v.string()),
         text: v.string(),
       }),
-      async run({ data }) {
+      async run({ data, toolCallId }) {
         if (data.operation === "replace" && data.oldText === undefined)
           throw new Error("A replace edit requires oldText");
         const edit =
@@ -47,7 +47,7 @@ export function workspaceTools(workspace: WorkspaceStore): ToolDefinition[] {
         return {
           output: {
             file: data.file,
-            content: await workspace.edit(data.file, edit),
+            content: await workspace.edit(data.file, edit, toolCallId),
           },
         };
       },
@@ -57,11 +57,15 @@ export function workspaceTools(workspace: WorkspaceStore): ToolDefinition[] {
       description:
         "Create a bounded workspace document under a new logical name.",
       input: v.object({ file: fileSchema, content: v.string() }),
-      async run({ data }) {
+      async run({ data, toolCallId }) {
         return {
           output: {
             file: data.file,
-            content: await workspace.create(data.file, data.content),
+            content: await workspace.create(
+              data.file,
+              data.content,
+              toolCallId,
+            ),
           },
         };
       },
@@ -70,8 +74,8 @@ export function workspaceTools(workspace: WorkspaceStore): ToolDefinition[] {
       name: "delete_workspace_file",
       description: "Delete one workspace document by logical name.",
       input: v.object({ file: fileSchema }),
-      async run({ data }) {
-        await workspace.delete(data.file);
+      async run({ data, toolCallId }) {
+        await workspace.delete(data.file, toolCallId);
         return { output: { file: data.file, deleted: true } };
       },
     }),

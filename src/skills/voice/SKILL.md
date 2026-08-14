@@ -38,8 +38,8 @@ The owner remains the authority over both files. A profile statement is a revisa
 Before writing, recover the owner rather than inventing a persona. Use evidence in this order:
 
 1. Current explicit instructions, corrections, beliefs, and preferences from the owner.
-2. Owner-authored or owner-approved material in `voice_evidence.md`, then the broader account history.
-3. Confirmed patterns in `voice_profile.md`, with tentative inferences treated as hypotheses.
+2. Owner-authored or owner-approved material in `voice_evidence`, then the broader account history.
+3. Confirmed patterns in `voice_profile`, with tentative inferences treated as hypotheses.
 4. The post, author, relationship, and event being responded to.
 
 Treat Stan's previous writing as weak evidence unless the owner approved or adopted it. Otherwise the agent can imitate its own imitation until the real voice disappears.
