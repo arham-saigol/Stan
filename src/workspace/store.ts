@@ -43,6 +43,7 @@ interface MutationEntry {
 
 const customFileName = /^[a-z][a-z0-9_]{0,63}$/;
 const operationsFile = "operations.json";
+const maxMutationRecords = 100;
 
 export class WorkspaceStore {
   private readonly maxBytes: number;
@@ -212,26 +213,25 @@ export class WorkspaceStore {
     if (entry.status === "pending") {
       const path = await this.pathFor(entry.file);
       if (entry.operation === "edit") {
-        const current = await this.readContent(
-          await this.assertSafe(entry.file),
-        );
-        if (current !== entry.result && entry.backup) {
-          const before = await this.readContent(
-            join(this.root, ".history", entry.backup),
+        const before = await this.backupContent(entry.backup);
+        if (before !== null) {
+          const current = await this.readContent(
+            await this.assertSafe(entry.file),
           );
-          if (current === before) await atomicWritePrivate(path, entry.result!);
+          if (current !== entry.result && current === before)
+            await atomicWritePrivate(path, entry.result!);
         }
       } else if (entry.operation === "create") {
         if (!(await this.exists(path)))
           await atomicWritePrivate(path, entry.result!);
-      } else if ((await this.exists(path)) && entry.backup) {
-        const current = await this.readContent(
-          await this.assertSafe(entry.file),
-        );
-        const before = await this.readContent(
-          join(this.root, ".history", entry.backup),
-        );
-        if (current === before) await unlink(path);
+      } else {
+        const before = await this.backupContent(entry.backup);
+        if (before !== null && (await this.exists(path))) {
+          const current = await this.readContent(
+            await this.assertSafe(entry.file),
+          );
+          if (current === before) await unlink(path);
+        }
       }
       await this.completeMutation(entry);
     }
@@ -254,6 +254,16 @@ export class WorkspaceStore {
   private async recordMutation(entry: MutationEntry): Promise<void> {
     const entries = await this.mutations();
     entries.push(entry);
+    let excess = entries.length - maxMutationRecords;
+    if (excess > 0) {
+      for (let index = 0; index < entries.length && excess > 0; index++) {
+        const candidate = entries[index];
+        if (!candidate || candidate.status !== "complete") continue;
+        entries.splice(index, 1);
+        index--;
+        excess--;
+      }
+    }
     await this.writeMutations(entries);
   }
 
@@ -351,6 +361,18 @@ export class WorkspaceStore {
 
   private assertSize(content: string, message: string): void {
     if (Buffer.byteLength(content) > this.maxBytes) throw new Error(message);
+  }
+
+  private async backupContent(
+    backup: string | undefined,
+  ): Promise<string | null> {
+    if (!backup) return null;
+    try {
+      return await this.readContent(join(this.root, ".history", backup));
+    } catch (error) {
+      if (isMissing(error)) return null;
+      throw error;
+    }
   }
 
   private async backup(file: WorkspaceFile, content: string): Promise<string> {

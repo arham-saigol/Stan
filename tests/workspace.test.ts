@@ -98,6 +98,108 @@ describe("bounded workspace", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("completes pending edits and deletes when their backups were pruned", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-workspace-"));
+    const store = new WorkspaceStore(root, { maxBytes: 1024 });
+    await store.initialize();
+    const before = await store.read("goals");
+    await store.create("ideas", "# Ideas\n", "setup:ideas");
+    const result = `${before}\nreplayed`;
+
+    await writeFile(
+      join(root, ".history", "operations.json"),
+      `${JSON.stringify([
+        {
+          operationKey: "replay:edit",
+          operation: "edit",
+          file: "goals",
+          result,
+          backup: "pruned-edit-backup",
+          status: "pending",
+          createdAt: new Date().toISOString(),
+        },
+        {
+          operationKey: "replay:delete",
+          operation: "delete",
+          file: "ideas",
+          result: null,
+          backup: "pruned-delete-backup",
+          status: "pending",
+          createdAt: new Date().toISOString(),
+        },
+      ])}\n`,
+    );
+
+    await expect(
+      store.edit(
+        "goals",
+        { operation: "append", text: "ignored" },
+        "replay:edit",
+      ),
+    ).resolves.toBe(result);
+    await expect(store.read("goals")).resolves.toBe(before);
+    await expect(
+      store.delete("ideas", "replay:delete"),
+    ).resolves.toBeUndefined();
+    await expect(store.read("ideas")).resolves.toBe("# Ideas\n");
+    expect(
+      (
+        JSON.parse(
+          await readFile(join(root, ".history", "operations.json"), "utf8"),
+        ) as Array<{ status: string }>
+      ).every((entry) => entry.status === "complete"),
+    ).toBe(true);
+  });
+
+  it("bounds completed mutation records without discarding pending replays", async () => {
+    const root = await mkdtemp(join(tmpdir(), "stan-workspace-"));
+    const store = new WorkspaceStore(root, { maxBytes: 1024 });
+    await store.initialize();
+    await writeFile(
+      join(root, ".history", "operations.json"),
+      `${JSON.stringify([
+        {
+          operationKey: "pending:replay",
+          operation: "create",
+          file: "pending",
+          result: "pending",
+          status: "pending",
+          createdAt: new Date().toISOString(),
+        },
+        ...Array.from({ length: 99 }, (_, index) => ({
+          operationKey: `complete:${index}`,
+          operation: "edit",
+          file: "goals",
+          result: "result",
+          status: "complete",
+          createdAt: new Date().toISOString(),
+        })),
+      ])}\n`,
+    );
+
+    await store.create("ideas", "# Ideas\n", "new:mutation");
+
+    const mutations = JSON.parse(
+      await readFile(join(root, ".history", "operations.json"), "utf8"),
+    ) as Array<{ operationKey: string; status: string }>;
+    expect(mutations).toHaveLength(100);
+    expect(
+      mutations.some(
+        (entry) =>
+          entry.operationKey === "pending:replay" && entry.status === "pending",
+      ),
+    ).toBe(true);
+    expect(mutations.some((entry) => entry.operationKey === "complete:0")).toBe(
+      false,
+    );
+    expect(
+      mutations.some(
+        (entry) =>
+          entry.operationKey === "new:mutation" && entry.status === "complete",
+      ),
+    ).toBe(true);
+  });
+
   it("recreates missing fixed documents without overwriting edits", async () => {
     const root = await mkdtemp(join(tmpdir(), "stan-workspace-"));
     const store = new WorkspaceStore(root, { maxBytes: 1024 });
