@@ -1,30 +1,21 @@
 import { defineTool, type ToolDefinition } from "@flue/runtime";
 import * as v from "valibot";
 import type { WorkspaceStore } from "../workspace/store.ts";
-import type { ApplicationDatabase } from "../storage/application-db.ts";
-import { workspaceMutationPayload } from "../gateway/owner-authorization.ts";
-import type { TrustedDeliveryContext } from "./types.ts";
 
-const fileSchema = v.picklist([
-  "goals",
-  "strategy",
-  "playbook",
-  "heartbeats",
-  "watchlist",
-  "voice_profile",
-  "voice_examples",
-]);
+const fileSchema = v.string();
 
-export function workspaceTools(
-  workspace: WorkspaceStore,
-  database: ApplicationDatabase,
-  trusted: TrustedDeliveryContext,
-): ToolDefinition[] {
+export function workspaceTools(workspace: WorkspaceStore): ToolDefinition[] {
   return [
     defineTool({
+      name: "list_workspace_files",
+      description: "List available workspace documents by logical name.",
+      async run() {
+        return { output: { files: await workspace.list() } };
+      },
+    }),
+    defineTool({
       name: "read_workspace_file",
-      description:
-        "Read one allowlisted Stan operating document by logical name.",
+      description: "Read one workspace document by logical name.",
       input: v.object({ file: fileSchema }),
       async run({ data }) {
         return {
@@ -35,28 +26,16 @@ export function workspaceTools(
     defineTool({
       name: "edit_workspace_file",
       description:
-        "Atomically replace exact text or append bounded text after the owner sends `edit workspace: {exact JSON matching these fields}`. Creates a repairable backup.",
+        "Atomically replace exact text or append bounded text to a workspace document. Creates a repairable backup.",
       input: v.object({
         file: fileSchema,
         operation: v.picklist(["replace", "append"]),
         oldText: v.optional(v.string()),
         text: v.string(),
       }),
-      async run({ data }) {
-        if (trusted.kind !== "owner" || !trusted.sourceMessageId)
-          throw new Error(
-            "Workspace edits require a current authenticated owner message",
-          );
-        const source = trusted.sourceMessageId;
+      async run({ data, toolCallId }) {
         if (data.operation === "replace" && data.oldText === undefined)
           throw new Error("A replace edit requires oldText");
-        const payload = workspaceMutationPayload(data);
-        const previous = database.beginWorkspaceEdit(
-          trusted.sourceMessageId,
-          payload,
-        );
-        if (previous !== undefined)
-          return { output: { file: data.file, content: previous } };
         const edit =
           data.operation === "replace"
             ? {
@@ -65,9 +44,39 @@ export function workspaceTools(
                 text: data.text,
               }
             : { operation: "append" as const, text: data.text };
-        const content = await workspace.edit(data.file, edit, source);
-        database.finishWorkspaceEdit(trusted.sourceMessageId, payload, content);
-        return { output: { file: data.file, content } };
+        return {
+          output: {
+            file: data.file,
+            content: await workspace.edit(data.file, edit, toolCallId),
+          },
+        };
+      },
+    }),
+    defineTool({
+      name: "create_workspace_file",
+      description:
+        "Create a bounded workspace document under a new logical name.",
+      input: v.object({ file: fileSchema, content: v.string() }),
+      async run({ data, toolCallId }) {
+        return {
+          output: {
+            file: data.file,
+            content: await workspace.create(
+              data.file,
+              data.content,
+              toolCallId,
+            ),
+          },
+        };
+      },
+    }),
+    defineTool({
+      name: "delete_workspace_file",
+      description: "Delete one workspace document by logical name.",
+      input: v.object({ file: fileSchema }),
+      async run({ data, toolCallId }) {
+        await workspace.delete(data.file, toolCallId);
+        return { output: { file: data.file, deleted: true } };
       },
     }),
   ];

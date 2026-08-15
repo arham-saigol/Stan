@@ -12,10 +12,12 @@ import { AutomationStore } from "../src/scheduler/automations.ts";
 import {
   automationMutationPayload,
   memoryMutationPayload,
-  workspaceMutationPayload,
 } from "../src/gateway/owner-authorization.ts";
 
-type Run = (context: { data: Record<string, unknown> }) => Promise<unknown>;
+type Run = (context: {
+  data: Record<string, unknown>;
+  toolCallId?: string;
+}) => Promise<unknown>;
 
 describe("trusted tool boundaries", () => {
   it("allows only the owned running heartbeat to settle once", async () => {
@@ -47,60 +49,35 @@ describe("trusted tool boundaries", () => {
     database.close();
   });
 
-  it("rejects workspace persistence outside a current owner turn", async () => {
-    const database = new ApplicationDatabase(":memory:");
-    database.migrate();
-    const edit = vi.fn();
-    const workspace = {
-      read: vi.fn(),
-      edit,
-    } as unknown as WorkspaceStore;
-    const tool = workspaceTools(workspace, database, {
-      kind: "heartbeat",
-      occurrenceId: "heartbeat-1",
-    }).find((candidate) => candidate.name === "edit_workspace_file")!;
-
-    await expect(
-      (tool.run as Run)({
-        data: { file: "goals", operation: "append", text: "injected" },
-      }),
-    ).rejects.toThrow(/owner message/i);
-    expect(edit).not.toHaveBeenCalled();
-    database.close();
-  });
-
-  it("binds a workspace edit to the exact owner-confirmed payload", async () => {
-    const database = new ApplicationDatabase(":memory:");
-    database.migrate();
-    database.claimInbound({
-      id: "owner-workspace",
-      senderIdentity: "923001234567@s.whatsapp.net",
-      body: "edit workspace",
-      receivedAt: new Date().toISOString(),
-    });
+  it("edits workspace files without owner authorization", async () => {
     const edit = vi.fn(async () => "updated");
-    const workspace = {
-      read: vi.fn(),
-      edit,
-    } as unknown as WorkspaceStore;
-    const tool = workspaceTools(workspace, database, {
-      kind: "owner",
-      sourceMessageId: "owner-workspace",
-    }).find((candidate) => candidate.name === "edit_workspace_file")!;
+    const workspace = { edit } as unknown as WorkspaceStore;
+    const tools = workspaceTools(workspace);
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "list_workspace_files",
+      "read_workspace_file",
+      "edit_workspace_file",
+      "create_workspace_file",
+      "delete_workspace_file",
+    ]);
+    const tool = tools.find(
+      (candidate) => candidate.name === "edit_workspace_file",
+    )!;
     const data = { file: "goals", operation: "append", text: "Ship Stan" };
 
-    database.createWorkspaceAuthorization(
-      "owner-workspace",
-      workspaceMutationPayload(data),
+    await expect(
+      (tool.run as Run)({ data, toolCallId: "heartbeat-edit-1" }),
+    ).resolves.toMatchObject({
+      output: { file: "goals", content: "updated" },
+    });
+    expect(edit).toHaveBeenCalledWith(
+      "goals",
+      {
+        operation: "append",
+        text: "Ship Stan",
+      },
+      "heartbeat-edit-1",
     );
-    await expect((tool.run as Run)({ data })).resolves.toMatchObject({
-      output: { file: "goals", content: "updated" },
-    });
-    await expect((tool.run as Run)({ data })).resolves.toMatchObject({
-      output: { file: "goals", content: "updated" },
-    });
-    expect(edit).toHaveBeenCalledOnce();
-    database.close();
   });
 
   it("returns the prior heartbeat settings result on an exact retry", async () => {

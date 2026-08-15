@@ -9,7 +9,6 @@ import {
   deriveAutomationAuthorization,
   deriveMemoryAuthorization,
   deriveHeartbeatSettingsAuthorization,
-  deriveWorkspaceAuthorization,
 } from "./owner-authorization.ts";
 
 export interface InboundMessage {
@@ -222,14 +221,6 @@ export class OwnerIngress {
           message.id,
           automationOperation.operation,
           automationOperation.payloadJson,
-          authorizationTime,
-        );
-      }
-      const workspaceAuthorization = deriveWorkspaceAuthorization(message.text);
-      if (workspaceAuthorization) {
-        this.database.createWorkspaceAuthorization(
-          message.id,
-          workspaceAuthorization.payloadJson,
           authorizationTime,
         );
       }
